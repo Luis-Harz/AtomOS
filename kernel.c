@@ -1,265 +1,92 @@
 #include <stdint.h>
 #include "fs.c"
-volatile uint16_t* vga_buffer = (uint16_t*)0xB8000;
-#define KEYBOARD_DATA 0x60
-#define KEYBOARD_STATUS 0x64
-#define VGA_WIDTH 80
-#define VGA_HEIGHT 25
-int cursor_x = 0;
-int cursor_y = 0;
-#define FULL_BLOCK 0xDB
-uint8_t color = 0x0F;
-#define MULTIBOOT_MAGIC  0x1BADB002
-#define MULTIBOOT_FLAGS 0x00000001
-#define MULTIBOOT_CHECKSUM  -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
-#define BLACK       0x0
-#define BLUE        0x1
-#define GREEN       0x2
-#define CYAN        0x3
-#define RED         0x4
-#define MAGENTA     0x5
-#define BROWN       0x6
-#define LIGHT_GRAY  0x7
-#define DARK_GRAY   0x8
-#define LIGHT_BLUE  0x9
-#define LIGHT_GREEN 0xA
-#define LIGHT_CYAN  0xB
-#define LIGHT_RED   0xC
-#define LIGHT_MAGENTA 0xD
-#define YELLOW      0xE
-#define WHITE       0xF
-#define version "0.0.1\n"
+#include "snake.c"
+#include "asm.h"
+#include "vga.h"
+#include "keyboard.h"
+#include "timer.h"
+#include "rtc.h"
+#include "piezo.h"
+#include "fs/ata/ata.h"
+#include "fs/fat/ff.h"
+#include "fs/fat/diskio.h"
+#include "pci.h"
+static FATFS fatfs;
+#define version "0.0.2\n"
 uint8_t fs_buffer[FS_IMAGE_SIZE];
 fs_t fs;
+static pci_bus_t g_pci_bus;
 
-__attribute__((section(".multiboot")))
-__attribute__((used))
-unsigned int multiboot_header[] = {
-    MULTIBOOT_MAGIC,
-    MULTIBOOT_FLAGS,
-    MULTIBOOT_CHECKSUM
-};
-
-
-static inline void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-static inline uint64_t rdtsc(void) {
-    uint32_t lo, hi;
-    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static uint32_t tsc_ticks_per_ms = 0;
-
-static void tsc_calibrate_pit(void) {
-    uint8_t val = (inb(0x61) & 0xFD) | 0x01;
-    outb(0x61, val);
-    outb(0x43, 0b10110010);
-    outb(0x42, 0xDC);
-    outb(0x42, 0x2E);
-    uint64_t start = rdtsc();
-    while (!(inb(0x61) & 0x20));
-    uint64_t end = rdtsc();
-    uint32_t ticks_10ms = (uint32_t)(end - start);
-    tsc_ticks_per_ms = ticks_10ms / 10;
-}
-
-static void tsc_calibrate_cpuid(void) {
-    uint32_t eax, ebx, ecx, edx;
-    __asm__ volatile (
-        "cpuid"
-        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
-        : "a"(0x15)
-    );
-    if (!eax || !ebx || !ecx)
-        return;
-    uint32_t ratio = ebx / eax;
-    uint32_t freq_khz = (ecx / 1000);
-    tsc_ticks_per_ms = freq_khz * ratio;
-}
-
-void timer_init(void) {
-    tsc_calibrate_cpuid();
-    if (!tsc_ticks_per_ms)
-        tsc_calibrate_pit();
-}
-
-void update_cursor(int x, int y) {
-    uint16_t pos = y * VGA_WIDTH + x;
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, pos & 0xFF);
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (pos >> 8) & 0xFF);
-}
-
-void delay_ms(uint32_t ms) {
-    uint64_t ticks = (uint64_t)tsc_ticks_per_ms * ms;
-    uint64_t start = rdtsc();
-    while ((rdtsc() - start) < ticks);
-}
-
-char scancode_to_ascii[256] = {
-    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
-    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',0,
-    'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\','z',
-    'x','c','v','b','n','m',',','.','/',0,'*',0,' ','\0'
-};
-
-char scancode_upper[256] = {
-    0, 27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
-    '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',0,
-    'A','S','D','F','G','H','J','K','L',':','"','~',0,'|','Z',
-    'X','C','V','B','N','M','<','>','?',0,'*',0,' ','\0'
-};
-
-uint8_t keyboard_read_scancode() {
-    while (!(inb(KEYBOARD_STATUS) & 1)) {
-        
+//PCI
+static void print_hex(u32 val, int digits)
+{
+    char buf[9];
+    buf[digits] = '\0';
+    for (int i = digits - 1; i >= 0; i--) {
+        int nibble = val & 0xF;
+        buf[i] = nibble < 10 ? '0' + nibble : 'a' + nibble - 10;
+        val >>= 4;
     }
-    return inb(KEYBOARD_DATA);
+    vga_print(buf);
 }
 
-int vga_used_lines() {
-    for (int y = VGA_HEIGHT - 1; y >= 0; y--) {
-        for (int x = 0; x < VGA_WIDTH; x++) {
-            uint16_t cell = vga_buffer[y * VGA_WIDTH + x];
-            char ch = cell & 0xFF;
-            if (ch != ' ') {
-                return y + 1;
-            }
+static void print_dec(size_t val)
+{
+    char buf[20];
+    int  i = 18;
+    buf[19] = '\0';
+    if (val == 0) { vga_print("0"); return; }
+    while (val && i >= 0) {
+        buf[i--] = '0' + (val % 10);
+        val /= 10;
+    }
+    vga_print(&buf[i + 1]);
+}
+
+void pci_list_devices(pci_bus_t *bus)
+{
+    vga_print("Found ");
+    print_dec(bus->count);
+    vga_print(" PCI device(s):\n\n");
+    for (size_t i = 0; i < bus->count; i++) {
+        pci_device_t *d = &bus->devices[i];
+        vga_print("[");
+        print_hex(d->bus,      2);
+        vga_print(":");
+        print_hex(d->device,   2);
+        vga_print(".");
+        print_hex(d->function, 1);
+        vga_print("] ");
+        vga_print("Vendor=");
+        print_hex(d->vendor_id, 4);
+        vga_print(" Device=");
+        print_hex(d->device_id, 4);
+        vga_print(" Class=");
+        print_hex(d->class_code, 2);
+        vga_print(":");
+        print_hex(d->subclass,   2);
+        vga_print(" IRQ=");
+        print_dec(d->irq_line);
+        vga_print("\n");
+        for (int b = 0; b < PCI_MAX_BARS; b++) {
+            if (d->bars[b].type == PCI_BAR_NONE) continue;
+
+            vga_print("  BAR");
+            print_dec(b);
+            vga_print(" [");
+            if      (d->bars[b].type == PCI_BAR_IO)    vga_print("I/O  ");
+            else if (d->bars[b].type == PCI_BAR_MEM32) vga_print("MEM32");
+            else                                        vga_print("MEM64");
+            vga_print("] base=0x");
+            print_hex((u32)(d->bars[b].base >> 32), 8);
+            print_hex((u32)(d->bars[b].base),       8);
+            vga_print(" size=0x");
+            print_hex((u32)d->bars[b].size, 8);
+            vga_print("\n");
         }
     }
-    return 0;
 }
-
-void put_block(int x, int y, uint8_t fg, uint8_t bg) {
-    uint16_t color = (bg << 4) | fg;
-    vga_buffer[y * 80 + x] = ((uint16_t)color << 8) | FULL_BLOCK;
-}
-
-void vga_scroll() {
-    for (int y = 0; y < VGA_HEIGHT - 1; y++)
-        for (int x = 0; x < VGA_WIDTH; x++)
-            vga_buffer[y * VGA_WIDTH + x] = vga_buffer[(y+1) * VGA_WIDTH + x];
-    for (int x = 0; x < VGA_WIDTH; x++)
-        vga_buffer[(VGA_HEIGHT-1) * VGA_WIDTH + x] = ((uint16_t)color << 8) | ' ';
-    cursor_y = VGA_HEIGHT - 1;
-}
-
-void vga_backspace(char* command, int* cmd_index) {
-    if (*cmd_index > 0) {
-        if (cursor_x > 2) {
-            cursor_x--;
-        } else if (cursor_y > 0) {
-            cursor_y--;
-            cursor_x = VGA_WIDTH - 1;
-        }
-        (*cmd_index)--;
-        command[*cmd_index] = 0;
-        vga_buffer[cursor_y * VGA_WIDTH + cursor_x] = ((uint16_t)color << 8) | ' ';
-    }
-}
-
-void vga_putc(char c) {
-    if (c == '\n') {
-        cursor_x = 0;
-        cursor_y++;
-    } else {
-        vga_buffer[cursor_y * VGA_WIDTH + cursor_x] = ((uint16_t)color << 8) | c;
-        cursor_x++;
-        if (cursor_x >= VGA_WIDTH) {
-            cursor_x = 0;
-            cursor_y++;
-        }
-    }
-
-    if (cursor_y >= VGA_HEIGHT) {
-        vga_scroll();
-    }
-}
-
-void vga_print(const char* str) {
-    while (*str) {
-        vga_putc(*str++);
-    }
-}
-
-void vga_clear() {
-    uint16_t blank = ((uint16_t)color << 8) | ' ';
-
-    for (int y = 0; y < VGA_HEIGHT; y++) {
-        for (int x = 0; x < VGA_WIDTH; x++) {
-            vga_buffer[y * VGA_WIDTH + x] = blank;
-        }
-    }
-
-    cursor_x = 0;
-    cursor_y = 0;
-}
-
-void colortest() {
-    vga_clear();
-    int y = 0;
-    int x = 0;
-    while(1) {
-        if (y == VGA_HEIGHT - 1 && x == VGA_WIDTH) {
-            break;
-        } else {
-            put_block(x, y, RED, RED);
-        }
-        if (y < VGA_HEIGHT) {
-            y++;
-        } else {
-            y = 0;
-            x++;
-        }
-    }
-    delay_ms(1000);
-    vga_clear();
-    y = 0;
-    x = 0;
-    while(1) {
-        if (y == VGA_HEIGHT - 1 && x == VGA_WIDTH) {
-            break;
-        } else {
-            put_block(x, y, GREEN, GREEN);
-        }
-        if (y < VGA_HEIGHT) {
-            y++;
-        } else {
-            y = 0;
-            x++;
-        }
-    }
-    delay_ms(1000);
-    vga_clear();
-    y = 0;
-    x = 0;
-    while(1) {
-        if (y == VGA_HEIGHT - 1 && x == VGA_WIDTH) {
-            break;
-        } else {
-            put_block(x, y, BLUE, BLUE);
-        }
-        if (y < VGA_HEIGHT) {
-            y++;
-        } else {
-            y = 0;
-            x++;
-        }
-    }
-    delay_ms(1000);
-    vga_clear();
-    return;
-}
+//END PCI
 
 int strcmp(const char* a, const char* b) {
     while(*a && (*a == *b)) { a++; b++; }
@@ -291,7 +118,7 @@ int startswith(const char *str, const char *prefix) {
     return 1;
 }
 
-int strlen(const char* str) {
+int kstrlen(const char* str) {
     int len = 0;
     while (str[len]) len++;
     return len;
@@ -309,25 +136,65 @@ int contains(const char* str, const char* substr) {
 
 void check_command(char* command) {
     if (strcmp(command, "help") == 0) {
-        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n");
+        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n snake\n time\n date\n");
     } 
     else if (strcmp(command, "clear") == 0) {
         vga_clear();
     } 
-    else if (strcmp(command, "echo") == 0) {
-        char toecho[128];
-        int i = 0;
-        echo(command, toecho, i);
-        if (!contains(toecho, "\n")) {
-            int len = strlen(toecho);
-            toecho[len] = '\n';
-            toecho[len + 1] = 0;
+    else if (startswith(command, "echo")) {
+        char* toecho = command + 4;
+        if (*toecho == '\0') {
+            vga_print("\n");
+        } else {
+            if (*toecho == ' ') toecho++;
+            vga_print(toecho);
+            vga_putc('\n');
         }
-        vga_print(toecho);
-    } 
+    }
     else if (strcmp(command, "color") == 0) {
-        colortest();
-    } 
+        colortest(delay_ms);
+    }
+    else if (strcmp(command, "snake") == 0) {
+        snake();
+    }
+    else if (strcmp(command, "pci") == 0) {
+        pci_list_devices(&g_pci_bus);
+    }
+    else if (strcmp(command, "time") == 0) {
+        int h, m, s;
+        char hs[3], ms[3], ss[3];
+        rtc_get_time(&h, &m, &s);
+        itoa2(h, hs);
+        itoa2(m, ms);
+        itoa2(s, ss);
+        vga_print(hs);
+        vga_print(":");
+        vga_print(ms);
+        vga_print(":");
+        vga_print(ss);
+        vga_print("\n");
+        delay_ms(100);
+    }
+    else if (strcmp(command, "date") == 0) {
+        int day, month, year;
+        char days[4], months[4], years[6];
+        rtc_get_date(&day, &month, &year);
+        itoa2(day,days);
+        itoa2(month, months);
+        itoa2(year, years);
+        vga_print(days);
+        vga_print(".");
+        vga_print(months);
+        vga_print(".");
+        vga_print(years);
+        vga_print("\n");
+    }
+    else if (strcmp(command, "sync") == 0) {
+        fs_compact(&fs);
+        int r = fs_save(&fs);
+        if (r == 0) vga_print("Saved OK\n");
+        else vga_print("Save FAILED\n");
+    }
     else if (strcmp(command, "version") == 0) {
         vga_print(version);
     } else if (startswith(command, "ls")) {
@@ -378,34 +245,44 @@ char tinyos_logo[] =
 "0010001010101110100100001\n"
 "0010001010100010111101111\n";
 
-void logo() {
-    vga_clear();
-    int logo_width  = 25;
-    int logo_height = 5;
-    int start_x = (VGA_WIDTH - logo_width) / 2;
-    int start_y = (VGA_HEIGHT - logo_height) / 2;
-    cursor_x = start_x;
-    cursor_y = start_y;
-    for (char* p = tinyos_logo; *p; p++) {
-        if (*p == '1') {
-            vga_putc(219);
-        } else if (*p == '0') {
-            vga_putc(' ');
-        } else if (*p == '\n') {
-            cursor_x = start_x;
-            cursor_y++;
-        }
-    }
-    delay_ms(10000);
-    vga_clear();
-}
-
-void kernel_main() {
-    fs_init(&fs, fs_buffer, FS_IMAGE_SIZE);
-    vga_clear();
+void kernel_main(uint32_t magic, uint32_t mb_addr) {
+    multiboot_info_t *mb = (multiboot_info_t *)mb_addr;
+    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
+    vga[0] = 0x0F00 | 'A';
+    vga[1] = 0x0F00 | 'B';
+    vga[2] = 0x0F00 | 'C';
+    vga_init(mb);
+    vga_print("Screen Good!");
     timer_init();
+    vga_clear();
+    uint32_t fat_lba = ata_find_fat_partition();
+    if (fat_lba == 0) vga_print("No FAT partition found!\n");
+    else {
+        vga_print("FAT partition at LBA: ");
+        vga_print("\n");
+    }
+    FRESULT mr = f_mount(&fatfs, "0:", 0);
+    if (mr == FR_OK) vga_print("FAT mount OK\n");
+    else vga_print("FAT mount FAILED\n");
+    vga_print("1");
+    fs_init(&fs, fs_buffer, FS_IMAGE_SIZE);
+    vga_print("2");
+    int lr = fs_load(&fs);
+    vga_print("3");
+    if (lr == 0) vga_print("FS load OK\n");
+    else vga_print("FS load failed (first boot?)\n");
     update_cursor(0, 0);
-    logo();
+    vga_clear();
+    logo(tinyos_logo);
+    //static pci_bus_t bus = {0};
+    vga_print("A\n");
+    //cli();
+    pci_enumerate(&g_pci_bus);
+    //sti();
+    vga_print("B\n");
+    vga_clear();
+    pci_list_devices(&g_pci_bus);
+    vga_print("C\n");
     vga_print("Welcome to TinyOS!\n");
     vga_print("This is an OS written in C!\n");
     char command[128];

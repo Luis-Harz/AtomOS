@@ -3,5 +3,6 @@ fs.h
 buildusb.sh
 iso/
 kernel.o
-linker.ld
-grub.cfg
+Doom/
+iso/
+buildgithub.sh
