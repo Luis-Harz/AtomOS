@@ -69,6 +69,7 @@ extern uint32_t fb_pitch;
 extern uint32_t fb_width;
 extern uint32_t fb_height;
 extern uint8_t  fb_bpp;
+static const uint32_t vga_to_rgb[16];
 
 // ── Function declarations ────────────────────────────────────────────────────
 void vga_init(multiboot_info_t *mb);
@@ -82,5 +83,6 @@ void put_block(int x, int y, uint8_t fg, uint8_t bg);
 int  vga_used_lines(void);
 void logo(char *lg);
 void colortest(void (*delay_fn)(uint32_t));
-
+void fb_draw_triangle_outline(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color);
+void fb_draw_triangle_outline_thick(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t color,int thickness);
 #endif // VGA_H

@@ -176,56 +176,50 @@ static inline bool pci_probe_bar(u8 bus, u8 dev, u8 func,
     u8  reg  = (u8)(PCI_REG_BAR0 + idx * 4u);
     u32 orig = pci_cfg_read32(bus, dev, func, reg);
 
-    if (orig == 0x00000000u || orig == 0xFFFFFFFFu) {
+    // BUG 4 FIX: don't skip BARs with base=0, they may just be unassigned
+    if (orig == 0xFFFFFFFFu) {
         out->type = PCI_BAR_NONE;
-        out->base = 0;
-        out->size = 0;
-        out->prefetch = false;
+        out->base = 0; out->size = 0; out->prefetch = false;
         return false;
     }
 
-    /* Write all ones to get mask */
     pci_cfg_write32(bus, dev, func, reg, 0xFFFFFFFFu);
     u32 mask = pci_cfg_read32(bus, dev, func, reg);
-    pci_cfg_write32(bus, dev, func, reg, orig); /* restore */
+    pci_cfg_write32(bus, dev, func, reg, orig);
+
+    // if mask is 0 after write-all-ones, BAR truly not implemented
+    if (mask == 0 || mask == 0xFFFFFFFFu) {
+        out->type = PCI_BAR_NONE;
+        out->base = 0; out->size = 0; out->prefetch = false;
+        return false;
+    }
 
     if (orig & 0x1u) {
-        /* I/O BAR */
         out->type = PCI_BAR_IO;
         out->base = (u64)(orig & 0xFFFCu);
         u32 size_mask = mask & 0xFFFCu;
         out->size = size_mask ? (u64)(~size_mask + 1u) : 0;
         out->prefetch = false;
     } else {
-        /* Memory BAR */
         u8 width = (u8)((orig >> 1u) & 0x3u);
         out->prefetch = ((orig >> 3u) & 0x1u) != 0;
-
         if (width == 0x2u) {
-            /* 64‑bit BAR: consume next BAR as high part */
-            u8  reg_hi   = (u8)(reg + 4u);
-            u32 orig_hi  = pci_cfg_read32(bus, dev, func, reg_hi);
-
+            u8  reg_hi  = (u8)(reg + 4u);
+            u32 orig_hi = pci_cfg_read32(bus, dev, func, reg_hi);
             pci_cfg_write32(bus, dev, func, reg_hi, 0xFFFFFFFFu);
             u32 mask_hi = pci_cfg_read32(bus, dev, func, reg_hi);
             pci_cfg_write32(bus, dev, func, reg_hi, orig_hi);
-
-            u64 full_mask = ((u64)mask_hi << 32u) |
-                            (u64)(mask & 0xFFFFFFF0u);
-
+            u64 full_mask = ((u64)mask_hi << 32u) | (u64)(mask & 0xFFFFFFF0u);
             out->type = PCI_BAR_MEM64;
-            out->base = ((u64)orig_hi << 32u) |
-                        (u64)(orig & 0xFFFFFFF0u);
+            out->base = ((u64)orig_hi << 32u) | (u64)(orig & 0xFFFFFFF0u);
             out->size = full_mask ? ~full_mask + 1u : 0;
         } else {
-            /* 32‑bit MMIO */
             u32 addr_mask = mask & 0xFFFFFFF0u;
             out->type = PCI_BAR_MEM32;
             out->base = (u64)(orig & 0xFFFFFFF0u);
             out->size = addr_mask ? (u64)(~addr_mask + 1u) : 0;
         }
     }
-
     return true;
 }
 
@@ -268,11 +262,16 @@ static inline bool pci_scan_device(u8 bus, u8 dev,
 
     /* Only probe endpoint (type 0) */
     if ((header & 0x7Fu) == PCI_HEADER_NORMAL) {
-        for (u8 i = 0; i < PCI_MAX_BARS; i++) {
-            if (!pci_probe_bar(bus, dev, func, i, &out->bars[i]))
-                continue;
-            if (out->bars[i].type == PCI_BAR_MEM64 && i + 1 < PCI_MAX_BARS)
-                i++; /* skip high dword */
+        for (u8 i = 0; i < PCI_MAX_BARS; ) {
+            if (!pci_probe_bar(bus, dev, func, i, &out->bars[i])) {
+                i++; continue;
+            }
+            if (out->bars[i].type == PCI_BAR_MEM64 && i + 1 < PCI_MAX_BARS) {
+                out->bars[i + 1].type = PCI_BAR_NONE; // mark high dword as consumed
+                i += 2; // skip both lo and hi
+            } else {
+                i++;
+            }
         }
     }
 
@@ -309,103 +308,49 @@ static void dbg_fail(void) {
     vga_print(" FAIL");
 }
 
-/* Safe & minimal PCI probe — bus 0 only, very few reads */
 static inline void pci_enumerate(pci_bus_t *out) {
     if (!out) return;
-
     out->count = 0;
     zero_mem(out->devices, sizeof(out->devices));
 
-    dbg("PCI probe bus0 start");
-
-    u8 bus = 0;
-    u8 maxbus = 4;
-    for (bus; bus < maxbus; bus++) {
+    for (u8 bus = 0; bus < 4; bus++) {
         for (u8 dev = 0; dev < PCI_MAX_DEV; dev++) {
-            /* Step 1: only read vendor ID — cheapest check */
             u16 vendor = pci_cfg_read16(bus, dev, 0, PCI_REG_VENDOR_ID);
+            if (vendor == 0xFFFFu || vendor == 0x0000u) continue;
 
-            if (vendor == 0xFFFFu || vendor == 0x0000u) {
-                continue;  /* device not present */
-            }
-
-            dbg("Found dev ");
-            // No number printing yet → just note we saw something
-            dbg_ok();
-
-            /* Step 2: read header type to know if multifunction */
-            u8 header = pci_cfg_read8(bus, dev, 0, PCI_REG_HEADER_TYPE);
-
-            u8 max_func = 1;
-            if (header & PCI_HEADER_MULTI_FUNC) {
-                max_func = PCI_MAX_FUNC;
-                dbg(" multi-func");
-            }
+            u8 header  = pci_cfg_read8(bus, dev, 0, PCI_REG_HEADER_TYPE);
+            u8 max_func = (header & PCI_HEADER_MULTI_FUNC) ? PCI_MAX_FUNC : 1;
 
             for (u8 func = 0; func < max_func; func++) {
-                /* Re-validate vendor on this function — important for multifunc */
                 vendor = pci_cfg_read16(bus, dev, func, PCI_REG_VENDOR_ID);
-                if (vendor == 0xFFFFu || vendor == 0x0000u) {
-                    continue;
-                }
-
-                if (out->count >= PCI_MAX_DEVICES) {
-                    dbg(" too many devices");
-                    return;
-                }
+                if (vendor == 0xFFFFu || vendor == 0x0000u) continue;
+                if (out->count >= PCI_MAX_DEVICES) return;
 
                 pci_device_t *d = &out->devices[out->count];
-
                 zero_mem(d, sizeof(*d));
-
-                /* Now try full scan — if this crashes, we know roughly where */
-                dbg(" scan f");
-                // No func number → just "f" for function
-
-                if (!pci_scan_device(bus, dev, func, d)) {
-                    dbg_fail();
-                    continue;
-                }
-
-                /* Paranoia check after full read */
-                if (d->vendor_id == 0xFFFFu || d->vendor_id == 0) {
-                    dbg_fail();
-                    continue;
-                }
-
-                dbg_ok();
+                if (!pci_scan_device(bus, dev, func, d)) continue;
+                if (d->vendor_id == 0xFFFFu || d->vendor_id == 0) continue;
 
                 out->count++;
 
-                /* Very basic identification print — no hex needed */
-                vga_print(" dev:");
-                if (d->vendor_id == 0x8086) vga_print(" Intel");
-                else if (d->vendor_id == 0x10DE) vga_print(" NVIDIA");
-                else if (d->vendor_id == 0x1002) vga_print(" AMD");
-                else if (d->vendor_id == 0x1234) vga_print(" BOCHS");
-                else vga_print(" ????");
+                vga_print("PCI ");
+                if (d->vendor_id == 0x8086)      vga_print("Intel");
+                else if (d->vendor_id == 0x10DE) vga_print("NVIDIA");
+                else if (d->vendor_id == 0x1002) vga_print("AMD");
+                else if (d->vendor_id == 0x1234) vga_print("BOCHS");
+                else                             vga_print("????");
 
                 vga_print(" class:");
-                if (d->class_code == 0x00) vga_print(" host");
-                else if (d->class_code == 0x01) vga_print(" storage");
-                else if (d->class_code == 0x02) vga_print(" net");
-                else if (d->class_code == 0x03) vga_print(" display");
-                else if (d->class_code == 0x06) vga_print(" bridge");
-                else vga_print(" ?");
-
-                vga_print("\n");   // assume your vga_print handles \n or at least doesn't crash on it
+                if      (d->class_code == 0x01) vga_print("storage");
+                else if (d->class_code == 0x02) vga_print("net");
+                else if (d->class_code == 0x03) vga_print("display");
+                else if (d->class_code == 0x06) vga_print("bridge");
+                else                            vga_print("?");
+                vga_print("\n");
             }
         }
-
-        dbg("PCI bus0 done - found ");
-        if (out->count == 0) {
-            dbg("NONE");
-        } else {
-            // Can't print number → just success message
-            dbg("some");
-        }
     }
-    dbg("\n");
+    vga_print("PCI done\n");
 }
 
 /* =====================================================================

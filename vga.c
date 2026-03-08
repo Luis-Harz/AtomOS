@@ -25,14 +25,99 @@ static const uint32_t vga_to_rgb[16] = {
 #define FB_COLS    (fb_width  / FB_CHAR_W)
 #define FB_ROWS    (fb_height / FB_CHAR_H)
 
+static inline uint32_t vga_to_rgb_func(uint32_t color) {
+    if (color <= 15) {
+        static const uint32_t vga_to_rgb[16] = {
+            0x000000, // BLACK
+            0x0000AA, // BLUE
+            0x00AA00, // GREEN
+            0x00AAAA, // CYAN
+            0xAA0000, // RED
+            0xAA00AA, // MAGENTA
+            0xAA5500, // BROWN
+            0xAAAAAA, // LIGHT_GRAY
+            0x555555, // DARK_GRAY
+            0x5555FF, // LIGHT_BLUE
+            0x55FF55, // LIGHT_GREEN
+            0x55FFFF, // LIGHT_CYAN
+            0xFF5555, // LIGHT_RED
+            0xFF55FF, // LIGHT_MAGENTA
+            0xFFFF55, // YELLOW
+            0xFFFFFF, // WHITE
+        };
+        return vga_to_rgb[color];
+    }
+    return color;
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 static inline void vga_outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
 static void fb_putpixel(uint32_t x, uint32_t y, uint32_t c) {
-    uint32_t *row = (uint32_t *)(fb_addr + y * fb_pitch);
-    row[x] = c;
+    uint32_t *pixel = (uint32_t *)(fb_addr + y * fb_pitch + x * 4);
+    *pixel = vga_to_rgb_func(c);
+}
+
+static void fb_draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int sx = (dx >= 0) ? 1 : -1;
+    int sy = (dy >= 0) ? 1 : -1;
+    dx = dx >= 0 ? dx : -dx;
+    dy = dy >= 0 ? dy : -dy;
+    int err = dx + ( -dy );
+
+    while (1) {
+        fb_putpixel(x0, y0, color);
+        if (x0 == x1 && y0 == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 >= -dy) { err += -dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static void fb_draw_line_thick(int x0, int y0, int x1, int y1, uint32_t color, int thickness) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int sx = dx >= 0 ? 1 : -1;
+    int sy = dy >= 0 ? 1 : -1;
+
+    dx = dx >= 0 ? dx : -dx;
+    dy = dy >= 0 ? dy : -dy;
+
+    int err = dx + (-dy);
+
+    while (1) {
+        for (int tx = -thickness/2; tx <= thickness/2; tx++) {
+            for (int ty = -thickness/2; ty <= thickness/2; ty++) {
+                uint32_t px = x0 + tx;
+                uint32_t py = y0 + ty;
+                if (px < fb_width && py < fb_height)
+                    fb_putpixel(px, py, color);
+            }
+        }
+
+        if (x0 == x1 && y0 == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 >= -dy) { err += -dy; x0 += sx; }
+        if (e2 <= dx)  { err += dx;  y0 += sy; }
+    }
+}
+
+void fb_draw_triangle_outline_thick(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t color,int thickness){
+    fb_draw_line_thick(x0,y0,x1,y1,color,thickness);
+    fb_draw_line_thick(x1,y1,x2,y2,color,thickness);
+    fb_draw_line_thick(x2,y2,x0,y0,color,thickness);
+}
+
+void fb_draw_triangle_outline(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color) {
+    fb_draw_line(x0, y0, x1, y1, color);
+    fb_draw_line(x1, y1, x2, y2, color);
+    fb_draw_line(x2, y2, x0, y0, color);
 }
 
 static void fb_drawchar(int cx, int cy, char c, uint8_t fg, uint8_t bg) {
@@ -130,7 +215,7 @@ void vga_putc(char c) {
         cursor_x++;
         if (cursor_x >= cols) { cursor_x = 0; cursor_y++; }
     }
-    if (cursor_y >= rows) vga_scroll();
+    while (cursor_y >= rows) vga_scroll();
 }
 
 void vga_print(const char *str) {

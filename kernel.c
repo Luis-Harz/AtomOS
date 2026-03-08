@@ -12,8 +12,7 @@
 #include "fs/fat/diskio.h"
 #include "pci.h"
 static FATFS fatfs;
-#define version "0.0.2\n"
-uint8_t fs_buffer[FS_IMAGE_SIZE];
+#define version "0.0.3\n"
 fs_t fs;
 static pci_bus_t g_pci_bus;
 
@@ -134,9 +133,14 @@ int contains(const char* str, const char* substr) {
     return 0;
 }
 
+void reboot() {
+    outb(0x64, 0xFE);
+    while(1) { __asm__ volatile ("hlt"); }
+}
+
 void check_command(char* command) {
     if (strcmp(command, "help") == 0) {
-        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n snake\n time\n date\n");
+        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n snake\n time\n date\n triangle\n triangle red\n triangle green\n triangle blue\n pci\n pci enumerate\n");
     } 
     else if (strcmp(command, "clear") == 0) {
         vga_clear();
@@ -157,58 +161,66 @@ void check_command(char* command) {
     else if (strcmp(command, "snake") == 0) {
         snake();
     }
+    else if (strcmp(command, "reboot") == 0) {
+        reboot();
+    }
+    else if (startswith(command, "triangle")) {
+        vga_clear();
+        if (use_framebuffer == 1) {
+            int x0 = 700, y0 = 50;
+            int x1 = 650,  y1 = 150;
+            int x2 = 750, y2 = 150;
+            char *color_str = command + 9;
+            uint32_t color = 0xFF0000;
+            if (strcmp(color_str, "red") == 0)        color = RED;
+            else if (strcmp(color_str, "green") == 0) color = GREEN;
+            else if (strcmp(color_str, "blue") == 0)  color = BLUE;
+            else                                       color = 0xFFFFFF;
+            fb_draw_triangle_outline_thick(x0, y0, x1, y1, x2, y2, color, 5);
+        } else {
+            vga_print("You don't use Modern Framebuffer!\n");
+        }
+    }
     else if (strcmp(command, "pci") == 0) {
         pci_list_devices(&g_pci_bus);
+    }
+    else if (strcmp(command, "pci enumerate") == 0) {
+        pci_enumerate(&g_pci_bus);
     }
     else if (strcmp(command, "time") == 0) {
         int h, m, s;
         char hs[3], ms[3], ss[3];
         rtc_get_time(&h, &m, &s);
-        itoa2(h, hs);
-        itoa2(m, ms);
-        itoa2(s, ss);
-        vga_print(hs);
-        vga_print(":");
-        vga_print(ms);
-        vga_print(":");
-        vga_print(ss);
-        vga_print("\n");
+        itoa2(h, hs); itoa2(m, ms); itoa2(s, ss);
+        vga_print(hs); vga_print(":"); vga_print(ms); vga_print(":"); vga_print(ss); vga_print("\n");
         delay_ms(100);
     }
     else if (strcmp(command, "date") == 0) {
         int day, month, year;
         char days[4], months[4], years[6];
         rtc_get_date(&day, &month, &year);
-        itoa2(day,days);
-        itoa2(month, months);
-        itoa2(year, years);
-        vga_print(days);
-        vga_print(".");
-        vga_print(months);
-        vga_print(".");
-        vga_print(years);
-        vga_print("\n");
-    }
-    else if (strcmp(command, "sync") == 0) {
-        fs_compact(&fs);
-        int r = fs_save(&fs);
-        if (r == 0) vga_print("Saved OK\n");
-        else vga_print("Save FAILED\n");
+        itoa2(day, days); itoa2(month, months); itoa2(year, years);
+        vga_print(days); vga_print("."); vga_print(months); vga_print("."); vga_print(years); vga_print("\n");
     }
     else if (strcmp(command, "version") == 0) {
         vga_print(version);
-    } else if (startswith(command, "ls")) {
-        fs_list(&fs, vga_print); 
-    } else if (startswith(command, "cat ")) {
+    }
+    else if (startswith(command, "ls")) {
+        fs_list(vga_print);
+    }
+    else if (startswith(command, "cat ")) {
         char* path = command + 4;
-        fs_file_t* f = fs_find(&fs, path);
-        if (f) {
-            vga_print(f->content);
+        static uint8_t cat_buf[4096];
+        int n = fs_read(path, cat_buf, sizeof(cat_buf) - 1);
+        if (n >= 0) {
+            cat_buf[n] = 0;
+            vga_print((char*)cat_buf);
             vga_putc('\n');
         } else {
             vga_print("File not found!\n");
         }
-    } else if (startswith(command, "write ")) {
+    }
+    else if (startswith(command, "write ")) {
         char* rest = command + 6;
         char* space = rest;
         while (*space && *space != ' ') space++;
@@ -219,24 +231,27 @@ void check_command(char* command) {
         *space = 0;
         char* path = rest;
         char* content = space + 1;
-        if (fs_write(&fs, path, content) == 0) {
+        if (fs_write(path, (uint8_t*)content, kstrlen(content)) == 0)
             vga_print("File written!\n");
-        } else {
-            vga_print("Write failed, FS full!\n");
-        }
-    } else if (startswith(command, "rm ")) {
+        else
+            vga_print("Write failed!\n");
+    }
+    else if (startswith(command, "rm ")) {
         char* path = command + 3;
-        if (fs_delete(&fs, path) == 0) {
+        if (fs_delete(path) == 0)
             vga_print("File deleted!\n");
-        } else {
+        else {
             vga_print("File not found!\n");
-            vga_print(path);
-            vga_print("\n");
+            vga_print(path); vga_print("\n");
         }
-    } else if (strcmp(command, "") != 0) {
+    }
+    else if (strcmp(command, "") != 0) {
         vga_print("Command not found!\n");
+        vga_print("Trying to run User Space Program\n");
+        run_program(command);
     }
 }
+
 
 char tinyos_logo[] =
 "1111100000000000111101111\n"
@@ -265,12 +280,8 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
     if (mr == FR_OK) vga_print("FAT mount OK\n");
     else vga_print("FAT mount FAILED\n");
     vga_print("1");
-    fs_init(&fs, fs_buffer, FS_IMAGE_SIZE);
     vga_print("2");
-    int lr = fs_load(&fs);
     vga_print("3");
-    if (lr == 0) vga_print("FS load OK\n");
-    else vga_print("FS load failed (first boot?)\n");
     update_cursor(0, 0);
     vga_clear();
     logo(tinyos_logo);
@@ -286,13 +297,11 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
     vga_print("Welcome to TinyOS!\n");
     vga_print("This is an OS written in C!\n");
     char command[128];
+    char lastcommand[128];
     int cmd_index = 0;
     int shift_pressed = 0;
     char c;
     while(1) {
-        if (vga_used_lines() == VGA_HEIGHT) {
-            vga_clear();
-        }
         vga_print("> ");
         while(1) {
             update_cursor(cursor_x, cursor_y);
@@ -302,6 +311,7 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
             } else if (scancode == 0xAA || scancode == 0xB6) { 
                 shift_pressed = 0;
             }
+            
             if (shift_pressed == 0) {
                 c = scancode_to_ascii[scancode];
             } else {
@@ -313,6 +323,8 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
                     command[cmd_index] = 0;
                     cmd_index = 0;
                     check_command(command);
+                    for (int i = 0; i < 128; i++)
+                        command[i] = 0;
                     break;
                 } else if (c == '\b') {
                     vga_backspace(command, &cmd_index);

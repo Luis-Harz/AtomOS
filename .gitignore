@@ -6,3 +6,4 @@ kernel.o
 Doom/
 iso/
 buildgithub.sh
+*.o
