@@ -20,11 +20,17 @@ gcc $CFLAGS_OTHER  -c diskio_impl.c   -o diskio.o
 gcc $CFLAGS_OTHER  -c libc.c          -o libc.o
 gcc $CFLAGS_OTHER  -c fs/ata/ata.c    -o ata.o
 gcc $CFLAGS_OTHER  -c keyboard.c    -o keyboard.o
+gcc $CFLAGS_OTHER  -c snake.c    -o snake.o
+gcc $CFLAGS_OTHER  -c pong.c    -o pong.o
+gcc $CFLAGS_OTHER  -c idt.c    -o idt.o
+gcc $CFLAGS_OTHER  -c gdt.c    -o gdt.o
+as --32 isr_stubs.s -o isr_stubs.o
 
 echo "[3/5] Link kernel..."
-ld -m elf_i386 -z max-page-size=0x1 -T linker.ld -o kernel.elf \
+gcc -m32 -ffreestanding -nostdlib -o kernel.elf -T linker.ld \
     boot.o kernel.o timer.o piezo.o font_data.o vga.o \
-    ff.o ffsystem.o ffunicode.o diskio.o libc.o ata.o keyboard.o
+    ff.o ffsystem.o ffunicode.o diskio.o libc.o ata.o keyboard.o \
+    snake.o pong.o idt.o isr_stubs.o gdt.o -lgcc
 
 echo "[4/5] Create ISO..."
 mkdir -p iso/boot/grub

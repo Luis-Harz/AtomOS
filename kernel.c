@@ -1,20 +1,26 @@
 #include <stdint.h>
 #include "fs.c"
-#include "snake.c"
+#include "snake.h"
 #include "asm.h"
 #include "vga.h"
 #include "keyboard.h"
 #include "timer.h"
 #include "rtc.h"
+#include "idt.h"
+#include "gdt.h"
 #include "piezo.h"
 #include "fs/ata/ata.h"
+#include "mouse.h"
 #include "fs/fat/ff.h"
 #include "fs/fat/diskio.h"
 #include "pci.h"
+#include "pong.h"
+#define CURSOR_SIZE 8
 static FATFS fatfs;
-#define version "0.0.3\n"
+#define version "0.0.4\n"
 fs_t fs;
 static pci_bus_t g_pci_bus;
+static uint32_t cursor_bg[CURSOR_SIZE * CURSOR_SIZE];
 
 //PCI
 static void print_hex(u32 val, int digits)
@@ -92,6 +98,14 @@ int strcmp(const char* a, const char* b) {
    return *a - *b;
 }
 
+//----Test Crash----
+void test_crash_div0() {
+    int a = 1;
+    int b = 0;
+    int c = a / b;
+    (void)c;
+}
+
 void echo(char* command, char* toecho, int length) {
     int i = 5;
     int j = 0;
@@ -140,11 +154,17 @@ void reboot() {
 
 void check_command(char* command) {
     if (strcmp(command, "help") == 0) {
-        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n snake\n time\n date\n triangle\n triangle red\n triangle green\n triangle blue\n pci\n pci enumerate\n");
-    } 
+        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n snake\n time\n date\n triangle\n triangle red\n triangle green\n triangle blue\n pci\n pci enumerate\n pong\n ontime\n");
+    }
+    else if (strcmp(command, "pong") == 0) {
+        pong();
+    }
     else if (strcmp(command, "clear") == 0) {
         vga_clear();
-    } 
+    }
+    else if (strcmp(command, "testcrash") == 0) {
+        test_crash_div0();
+    }
     else if (startswith(command, "echo")) {
         char* toecho = command + 4;
         if (*toecho == '\0') {
@@ -236,6 +256,14 @@ void check_command(char* command) {
         else
             vga_print("Write failed!\n");
     }
+    else if (strcmp(command, "ontime") == 0) {
+        int timesince = ms_since_startup();
+        int timesinces = timesince / 1000;
+        char timesincesStr[500];
+        itoa(timesinces, timesincesStr);
+        vga_print(timesincesStr);
+        vga_print("s since startup\n");
+    }
     else if (startswith(command, "rm ")) {
         char* path = command + 3;
         if (fs_delete(path) == 0)
@@ -252,6 +280,58 @@ void check_command(char* command) {
     }
 }
 
+//---------------------Mouse---------------------
+static int last_x = -1;
+static int last_y = -1;
+
+void xor_cursor(int x, int y)
+{
+    for (int dy = 0; dy < CURSOR_SIZE; dy++) {
+        for (int dx = 0; dx <= dy; dx++) {
+
+            int px = x + dx;
+            int py = y + dy;
+
+            if (px >= fb_width || py >= fb_height)
+                continue;
+
+            uint32_t *pixel =
+                (uint32_t*)(fb_addr + py * fb_pitch + px * 4);
+
+            *pixel ^= 0x00FFFFFF;
+        }
+    }
+}
+
+void ps2mouse_poll() {
+    uint8_t status = inb(0x64);
+    if (!(status & 1)) return;
+    if (!(status & (1 << 5))) return;
+    uint8_t data = inb(0x60);
+    static uint8_t mouse_cycle = 0;
+    static uint8_t mouse_packet[3];
+    mouse_packet[mouse_cycle++] = data;
+    if (mouse_cycle < 3) return;
+    mouse_cycle = 0;
+    if (!(mouse_packet[0] & 0x08)) return;
+    int dx = (int8_t)mouse_packet[1];
+    int dy = (int8_t)mouse_packet[2];
+    mouse.x += dx;
+    mouse.y -= dy;
+}
+
+void update_mouse() {
+    if(mouse.x == last_x && mouse.y == last_y) {
+        return;
+    }
+    //Revert Mouse
+    xor_cursor(last_x, last_y);
+    //Draw New One
+    xor_cursor(mouse.x, mouse.y);
+    //Save Pos
+    last_x = mouse.x;
+    last_y = mouse.y;
+}
 
 char tinyos_logo[] =
 "1111100000000000111101111\n"
@@ -282,6 +362,17 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
     vga_print("1");
     vga_print("2");
     vga_print("3");
+    if (use_framebuffer) {
+        vga_print("mouse init\n");
+        ps2mouse_init();
+        mouse.x = fb_width / 2;
+        mouse.y = fb_height / 2;
+        vga_print("mouse init done\n");
+    }
+    gdt_init();
+    vga_print("Init IDT");
+    idt_init();
+    vga_print("Init IDT Done");
     update_cursor(0, 0);
     vga_clear();
     logo(tinyos_logo);
@@ -305,6 +396,10 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
         vga_print("> ");
         while(1) {
             update_cursor(cursor_x, cursor_y);
+            if (use_framebuffer) {
+                ps2mouse_poll();
+                update_mouse();
+            }
             uint8_t scancode = keyboard_read_scancode();
             if (scancode == 0x2A || scancode == 0x36) {
                 shift_pressed = 1;

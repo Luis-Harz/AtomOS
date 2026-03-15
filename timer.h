@@ -10,6 +10,7 @@ static inline uint64_t rdtsc(void) {
     return ((uint64_t)hi << 32) | lo;
 }
 
+uint64_t ms_since_startup(void);
 void timer_init(void);
 void delay_ms(uint32_t ms);
 

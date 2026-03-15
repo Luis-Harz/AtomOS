@@ -11,7 +11,7 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 
 /* =====================================================================
- * PCI CONFIGURATION SPACE — I/O PORT ACCESS (x86)
+ * PCI CONFIGURATION SPACE
  * ===================================================================== */
 
 #define PCI_CONFIG_ADDRESS 0xCF8
@@ -168,15 +168,13 @@ static inline void pci_cfg_write8(u8 bus, u8 dev, u8 func, u8 reg, u8 val) {
 }
 
 /* =====================================================================
- * BAR PROBING (SAFE, NO MMIO TOUCH)
+ * BAR PROBING
  * ===================================================================== */
 
 static inline bool pci_probe_bar(u8 bus, u8 dev, u8 func,
                                  u8 idx, pci_bar_t *out) {
     u8  reg  = (u8)(PCI_REG_BAR0 + idx * 4u);
     u32 orig = pci_cfg_read32(bus, dev, func, reg);
-
-    // BUG 4 FIX: don't skip BARs with base=0, they may just be unassigned
     if (orig == 0xFFFFFFFFu) {
         out->type = PCI_BAR_NONE;
         out->base = 0; out->size = 0; out->prefetch = false;
@@ -259,8 +257,6 @@ static inline bool pci_scan_device(u8 bus, u8 dev,
         out->bars[i].size = 0;
         out->bars[i].prefetch = false;
     }
-
-    /* Only probe endpoint (type 0) */
     if ((header & 0x7Fu) == PCI_HEADER_NORMAL) {
         for (u8 i = 0; i < PCI_MAX_BARS; ) {
             if (!pci_probe_bar(bus, dev, func, i, &out->bars[i])) {
@@ -278,7 +274,6 @@ static inline bool pci_scan_device(u8 bus, u8 dev,
     return true;
 }
 
-/* simple memset/memcpy for early kernel */
 static inline void zero_mem(void *ptr, u32 size) {
     u8 *p = (u8 *)ptr;
     for (u32 i = 0; i < size; i++) p[i] = 0;
@@ -291,7 +286,7 @@ static inline void copy_mem(void *dst, const void *src, u32 size) {
 }
 
 /* =====================================================================
- * BUS ENUMERATION — SAFE VERSION
+ * BUS ENUMERATION
  * ===================================================================== */
 
 static pci_device_t _pci_tmp;
@@ -379,7 +374,7 @@ static inline pci_device_t *pci_find_class(pci_bus_t *bus,
 }
 
 /* =====================================================================
- * COMMAND HELPERS (DO NOT CALL UNTIL YOU ARE READY)
+ * COMMAND HELPERS
  * ===================================================================== */
 
 static inline void pci_enable_io(const pci_device_t *d) {

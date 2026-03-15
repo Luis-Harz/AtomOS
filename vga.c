@@ -55,7 +55,7 @@ static inline void vga_outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
-static void fb_putpixel(uint32_t x, uint32_t y, uint32_t c) {
+void fb_putpixel(uint32_t x, uint32_t y, uint32_t c) {
     uint32_t *pixel = (uint32_t *)(fb_addr + y * fb_pitch + x * 4);
     *pixel = vga_to_rgb_func(c);
 }
@@ -120,7 +120,7 @@ void fb_draw_triangle_outline(int x0, int y0, int x1, int y1, int x2, int y2, ui
     fb_draw_line(x2, y2, x0, y0, color);
 }
 
-static void fb_drawchar(int cx, int cy, char c, uint8_t fg, uint8_t bg) {
+void fb_drawchar(int cx, int cy, char c, uint8_t fg, uint8_t bg) {
     uint32_t fgc = vga_to_rgb[fg & 0xF];
     uint32_t bgc = vga_to_rgb[bg & 0xF];
     int px = cx * FB_CHAR_W;
@@ -157,11 +157,14 @@ static void fb_scroll(void) {
 void vga_init(multiboot_info_t *mb) {
     if (mb && (mb->flags & (1 << 12)) && mb->fb_addr && mb->fb_bpp == 32) {
         use_framebuffer = 1;
+        vga_print("Framebuffer ON\n");
         fb_addr   = (uint8_t *)(uint32_t)mb->fb_addr;
         fb_pitch  = mb->fb_pitch;
         fb_width  = mb->fb_width;
         fb_height = mb->fb_height;
         fb_bpp    = mb->fb_bpp;
+    } else {
+        vga_print("Framebuffer OFF\n");
     }
 }
 
@@ -287,4 +290,23 @@ void logo(char *lg) {
     }
     delay_ms(1000);
     vga_clear();
+}
+
+void logo_crash(char *lg) {
+    uint8_t saved_color = color;
+    color = 0x0E;
+    int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
+    int rows = use_framebuffer ? (int)FB_ROWS : VGA_HEIGHT;
+    int logo_width  = 15;
+    int logo_height = 8;
+    int start_x = (cols - logo_width) / 2;
+    int start_y = (rows - logo_height) / 2;
+    cursor_x = start_x;
+    cursor_y = start_y;
+    for (char *p = lg; *p; p++) {
+        if (*p == '1')       vga_putc((char)219);
+        else if (*p == '0')  vga_putc(' ');
+        else if (*p == '\n') { cursor_x = start_x; cursor_y++; }
+    }
+    color = saved_color;
 }

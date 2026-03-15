@@ -33,7 +33,9 @@ void itoa2(int num, char *str) {
     else itoa(num, str);
 }
 
-uint8_t keyboard_read_scancode(void) {
-    while (!(inb(KEYBOARD_STATUS) & 1));
-    return inb(KEYBOARD_DATA);
+uint8_t keyboard_read_scancode() {
+    uint8_t status = inb(0x64);
+    if (!(status & 1)) return 0;
+    if (status & (1 << 5)) return 0;
+    return inb(0x60);
 }

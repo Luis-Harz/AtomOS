@@ -7,17 +7,12 @@ static void tsc_calibrate_pit(void) {
     outb(0x43, 0xB0);
     outb(0x42, 0xFF);
     outb(0x42, 0xFF);
-
     uint8_t val = (inb(0x61) & 0xFC) | 0x01;
     outb(0x61, val);
-
     uint64_t start = rdtsc();
     while (inb(0x61) & 0x20);
     while (!(inb(0x61) & 0x20));
     uint64_t end = rdtsc();
-
-    // Avoid 64-bit division — work in 32-bit
-    // elapsed ticks over ~55ms, divide by 55 to get ticks/ms
     uint32_t elapsed = (uint32_t)(end - start);
     tsc_ticks_per_ms = elapsed / 55;
     if (tsc_ticks_per_ms == 0)
@@ -45,4 +40,9 @@ void delay_ms(uint32_t ms) {
     uint64_t ticks = (uint64_t)tsc_ticks_per_ms * ms;
     uint64_t start = rdtsc();
     while ((rdtsc() - start) < ticks);
+}
+
+uint64_t ms_since_startup(void) {
+    uint64_t ticks = rdtsc();
+    return ticks / tsc_ticks_per_ms;
 }
