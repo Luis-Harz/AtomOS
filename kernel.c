@@ -17,7 +17,7 @@
 #include "pong.h"
 #define CURSOR_SIZE 8
 static FATFS fatfs;
-#define version "0.0.4\n"
+#define version "0.0.5\n"
 fs_t fs;
 static pci_bus_t g_pci_bus;
 static uint32_t cursor_bg[CURSOR_SIZE * CURSOR_SIZE];

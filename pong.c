@@ -2,6 +2,8 @@
 #include "keyboard.h"
 #include "timer.h"
 #include "pong.h"
+//For Randomization
+#include "snake.h"
 
 // Game state
 static uint16_t back_buffer_pong[VGA_HEIGHT * VGA_WIDTH];
@@ -17,20 +19,30 @@ int running = 0;
 int ball_dx = 1; // +1 = rechts, -1 = links
 int ball_dy = 1; // +1 = unten, -1 = oben
 
-//Randomize
-uint16_t lfsr = 0xACE1u;
-uint16_t bit;
-
-uint16_t rand16() {
-    bit = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5)) & 1;
-    lfsr = (lfsr >> 1) | (bit << 15);
-    return lfsr;
-}
-
 // Check keyboard status register before reading data
 // Port 0x64 bit 0 = output buffer full (data is ready)
 static int keyboard_ready() {
     return inb(0x64) & 0x01;
+}
+
+void resetgamepong() {
+    ballx = 40;
+    bally = 12;
+    //Randomize Ball start
+    int balldxpre = rand16() % 2;
+    int balldypre = rand16() % 2;
+    if (balldxpre == 1) {
+        ball_dx = 1;
+    } else {
+        ball_dx = -1;
+    }
+    if (balldypre == 1) {
+        ball_dy = 1;
+    } else {
+        ball_dy = -1;
+    }
+    pong1y = VGA_HEIGHT / 2;
+    pong2y = VGA_HEIGHT / 2;
 }
 
 void poll_keyboard() {
@@ -57,10 +69,8 @@ void change_ball_direction() {
         ball_dx = -ball_dx;
     }
     if (ballx <= 0 || ballx >= VGA_WIDTH - 1) {
-        ballx = 40;
-        bally = 12;
-        ball_dx = (ballx <= 0) ? 1 : -1;
-        ball_dy = 1;
+        //Also reset game
+        resetgamepong();
     }
 }
 
@@ -158,26 +168,6 @@ static void render() {
     pong_put_block(ballx, bally, BLUE, BLUE);
     draw_border();
     present();
-}
-
-void resetgamepong() {
-    ballx = 40;
-    bally = 12;
-    //Randomize Ball start
-    int balldxpre = rand16() % 2;
-    int balldypre = rand16() % 2;
-    if (balldxpre == 1) {
-        ball_dx = 1;
-    } else {
-        ball_dx = -1;
-    }
-    if (balldypre == 1) {
-        ball_dy = 1;
-    } else {
-        ball_dy = -1;
-    }
-    pong1y = VGA_HEIGHT / 2;
-    pong2y = VGA_HEIGHT / 2;
 }
 
 void pong() {
