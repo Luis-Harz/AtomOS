@@ -1,0 +1,3746 @@
+---kernel.h---
+#ifndef KERNEL_H
+#define KERNEL_H
+//Nothing Yet
+
+#endif
+
+---pong.c---
+#include "vga.h"
+#include "keyboard.h"
+#include "timer.h"
+#include "pong.h"
+//For Randomization
+#include "snake.h"
+
+// Game state
+static uint16_t back_buffer_pong[VGA_HEIGHT * VGA_WIDTH];
+int pong1x = 5;
+int pong2x = VGA_WIDTH - 5;
+int pong1y = VGA_HEIGHT / 2;
+int pong2y = VGA_HEIGHT / 2;
+int ballx = 40;
+int bally = 12;
+//Is running
+int running = 0;
+//Ball direction x and y
+int ball_dx = 1; // +1 = rechts, -1 = links
+int ball_dy = 1; // +1 = unten, -1 = oben
+
+// Check keyboard status register before reading data
+// Port 0x64 bit 0 = output buffer full (data is ready)
+static int keyboard_ready() {
+    return inb(0x64) & 0x01;
+}
+
+void resetgamepong() {
+    ballx = 40;
+    bally = 12;
+    //Randomize Ball start
+    int balldxpre = rand16() % 2;
+    int balldypre = rand16() % 2;
+    if (balldxpre == 1) {
+        ball_dx = 1;
+    } else {
+        ball_dx = -1;
+    }
+    if (balldypre == 1) {
+        ball_dy = 1;
+    } else {
+        ball_dy = -1;
+    }
+    pong1y = VGA_HEIGHT / 2;
+    pong2y = VGA_HEIGHT / 2;
+}
+
+void poll_keyboard() {
+    //if (!keyboard_ready()) return;  // nothing to read
+
+    uint8_t scancode = inb(KEYBOARD_DATA);
+    switch (scancode) {
+        case 0x11: if (pong1y > 2) {pong1y--;} break;
+        case 0x1F: if (pong1y < VGA_HEIGHT - 3) {pong1y++;} break;
+        case 0x01: running = 0;
+        default: break;
+    }
+    pong2y = bally;
+}
+
+void change_ball_direction() {
+    if (bally <= 0 || bally >= VGA_HEIGHT - 1) {
+        ball_dy = -ball_dy;
+    }
+    if (ballx == pong1x + 1 && bally >= pong1y - 1 && bally <= pong1y + 1) {
+        ball_dx = -ball_dx;
+    }
+    if (ballx == pong2x - 1 && bally >= pong2y - 1 && bally <= pong2y + 1) {
+        ball_dx = -ball_dx;
+    }
+    if (ballx <= 0 || ballx >= VGA_WIDTH - 1) {
+        //Also reset game
+        resetgamepong();
+    }
+}
+
+void put_c_back_buffer(char c) {
+    back_buffer_pong[cursor_y * VGA_WIDTH + cursor_x] = ((uint16_t)color << 8) | (uint8_t)c;
+}
+
+void print_back_buffer(const char *str) {
+    while (*str) put_c_back_buffer(*str++);
+}
+
+
+void put_char_back_buffer(int x, int y, char ch, uint8_t fg, uint8_t bg) {
+    uint16_t entry = ((bg << 4 | fg) << 8) | (uint8_t)ch;
+    back_buffer_pong[y * VGA_WIDTH + x] = entry;
+}
+
+void pong_put_block(int x, int y, uint8_t fg, uint8_t bg) {
+    put_char_back_buffer(x, y, FULL_BLOCK, fg, bg);
+}
+
+void put_block_with_char(int x, int y, char ch, uint8_t fg, uint8_t bg) {
+    uint16_t entry = ((bg << 4 | fg) << 8) | (uint8_t)ch;
+    back_buffer_pong[y * VGA_WIDTH + x] = entry;
+}
+
+void put_char(int x, int y, char ch, uint8_t fg, uint8_t bg) {
+    if (use_framebuffer) {
+        fb_drawchar(x, y, ch, fg, bg);
+    } else {
+        uint16_t col = (bg << 4) | fg;
+        vga_buffer[y * VGA_WIDTH + x] = ((uint16_t)col << 8) | (uint8_t)ch;
+    }
+}
+
+void update() {
+    //Change Ball Pos on Collision
+    ballx += ball_dx;
+    bally += ball_dy;
+    //Ball Collision Check
+    change_ball_direction();
+}
+
+void pong_clear_buffer() {
+    uint8_t bg = 0;
+    uint8_t fg = 0;
+    uint16_t blank = ((bg << 4 | fg) << 8) | ' ';
+    for (int y = 0; y < VGA_HEIGHT; y++) {
+        for (int x = 0; x < VGA_WIDTH; x++) {
+            back_buffer_pong[y * VGA_WIDTH + x] = blank;
+        }
+    }
+}
+
+void present() {
+    for (int y = 0; y < VGA_HEIGHT; y++) {
+        for (int x = 0; x < VGA_WIDTH; x++) {
+            uint16_t entry = back_buffer_pong[y * VGA_WIDTH + x];
+            char ch      = entry & 0x00FF;
+            uint8_t fg   = (entry & 0x0F00) >> 8;
+            uint8_t bg   = (entry & 0xF000) >> 12;
+            put_char(x, y, ch, fg, bg);
+        }
+    }
+}
+
+void draw_border() {
+    uint8_t fg = WHITE;
+    uint8_t bg = 0;
+    for (int x = 0; x < VGA_WIDTH; x++) {
+        pong_put_block(x, 0, fg, bg);
+        pong_put_block(x, VGA_HEIGHT - 1, fg, bg);
+    }
+    for (int y = 0; y < VGA_HEIGHT; y++) {
+        pong_put_block(0, y, fg, bg);
+        pong_put_block(VGA_WIDTH - 1, y, fg, bg);
+    }
+}
+
+static void render() {
+    pong_clear_buffer();
+
+    // Paddle 1 (RED)
+    for (int i = -1; i <= 1; i++) {
+        pong_put_block(pong1x, pong1y + i, RED, RED);
+    }
+
+    // Paddle 2 (GREEN)
+    for (int i = -1; i <= 1; i++) {
+        pong_put_block(pong2x, pong2y + i, GREEN, GREEN);
+    }
+
+    //Ball (BLUE)
+    pong_put_block(ballx, bally, BLUE, BLUE);
+    draw_border();
+    present();
+}
+
+void pong() {
+    resetgamepong();
+    running = 1;
+    while (running) {
+        poll_keyboard();   // 1. input
+        if (pong2y < 2) {
+            pong2y = 2;
+        }
+        if (pong2y > VGA_HEIGHT - 3) {
+            pong2y = VGA_HEIGHT - 3;
+        }
+        update();              // 2. logic
+        render();              // 3. draw
+        delay_ms(8);        // 4. ~60fps
+    }
+    resetgamepong();
+    vga_clear();
+}
+
+---fs.h---
+#ifndef FS_H
+#define FS_H
+
+#include <stdint.h>
+#include "fs/fat/ff.h"
+
+typedef struct {
+    FATFS fatfs;
+} fs_t;
+
+void fs_init  (fs_t *fs);
+void fs_deinit(fs_t *fs);
+int  fs_read  (const char *path, uint8_t *buf, uint32_t capacity);
+int  fs_write (const char *path, const uint8_t *content, uint32_t size);
+int  fs_delete(const char *path);
+void fs_list  (void (*callback)(const char *path));
+void run_program(const char *path);
+int fs_append(const char *path, const uint8_t *content, uint32_t size);
+
+#endif
+
+---piezo.c---
+#include "piezo.h"
+
+void beep(uint16_t freq, uint16_t duration_ms) {
+    uint16_t div = 1193180 / freq;
+    outb(PIT_CTRL,  0xB6);
+    outb(PIT_DATA2, div & 0xFF);
+    outb(PIT_DATA2, (div >> 8) & 0xFF);
+    uint8_t tmp = inb(SPEAKER_CTRL);
+    if (tmp != (tmp | 3))
+        outb(SPEAKER_CTRL, tmp | 3);
+    delay_ms(duration_ms);
+    outb(SPEAKER_CTRL, inb(SPEAKER_CTRL) & 0xFC);
+}
+
+---rtc.h---
+#ifndef RTC_H
+#define RTC_H
+
+#include <stdint.h>
+#include "timer.h"
+#include "keyboard.h"
+#define CMOS_ADDRESS 0x70
+#define CMOS_DATA    0x71
+
+static inline uint8_t cmos_read(uint8_t reg)
+{
+    outb(CMOS_ADDRESS, reg);
+    return inb(CMOS_DATA);
+}
+
+static inline int rtc_update_in_progress()
+{
+    outb(CMOS_ADDRESS, 0x0A);
+    return (inb(CMOS_DATA) & 0x80);
+}
+
+static inline int bcd_to_int(uint8_t bcd)
+{
+    return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+static inline void rtc_get_time(int* hour, int* minute, int* second)
+{
+    uint8_t h, m, s, regB;
+
+    while (rtc_update_in_progress());
+
+    s = cmos_read(0x00);
+    m = cmos_read(0x02);
+    h = cmos_read(0x04);
+
+    regB = cmos_read(0x0B);
+
+    if (!(regB & 0x04)) {
+        s = bcd_to_int(s);
+        m = bcd_to_int(m);
+        h = bcd_to_int(h);
+    }
+
+    if (!(regB & 0x02) && (h & 0x80)) {
+        h = ((h & 0x7F) + 12) % 24;
+    }
+
+    *hour = h;
+    *minute = m;
+    *second = s;
+}
+
+static inline void rtc_get_date(int* day, int* month, int* year)
+{
+    uint8_t d, mo, y, regB;
+
+    while (rtc_update_in_progress());
+
+    d = cmos_read(0x07);
+    mo = cmos_read(0x08);
+    y = cmos_read(0x09);
+
+    regB = cmos_read(0x0B);
+
+    if (!(regB & 0x04)) {
+        d = bcd_to_int(d);
+        mo = bcd_to_int(mo);
+        y = bcd_to_int(y);
+    }
+
+    *day = d;
+    *month = mo;
+    *year = 2000 + y;
+}
+
+#endif
+
+---login.h---
+#ifndef LOGIN_H
+#define LOGIN_H
+#include <stdint.h>
+#include "fs.h"
+#include "vga.h"
+#include "keyboard.h"
+#include "timer.h"
+#include "libc.h"
+#include "fs/ata/ata.h"
+#include "fs/fat/ff.h"
+#include "fs/fat/diskio.h"
+#include "input.h"
+#define MAX_USERS 10
+
+typedef struct {
+    char username[16];
+    uint32_t passhash;
+} user_t;
+user_t users[MAX_USERS];
+int user_count = 0;
+
+//-------Password-------
+uint32_t hash(const char *str) {
+    uint32_t hash = 0x811C9DC5;
+    while (*str) {
+        hash ^= (uint8_t)(*str++);
+        hash *= 0x01000193;
+    }
+    return hash;
+}
+
+int compare(char* input, uint32_t passhash) {
+    return (hash(input) == passhash);
+}
+
+//Help function
+void u32_to_str(uint32_t val, char* buf) {
+    int i = 10;
+    buf[10] = 0;
+    if(val == 0) { buf[0]='0'; buf[1]=0; return; }
+    while(val && i>0){
+        i--;
+        buf[i] = '0' + (val % 10);
+        val /= 10;
+    }
+    int j = 0;
+    while(buf[i]) buf[j++] = buf[i++];
+    buf[j] = 0;
+}
+
+//-------Users-------
+//-----Make-----
+void make_user() {
+    vga_print("-----Create User-----\n");
+    while (1) {
+        char user[128];
+        char pass[128];
+        char line[256];
+        vga_print("Enter username: ");
+        input(user);
+        int exists = 0;
+        for(int i = 0; i < user_count; i++) {
+            if(strcmp(users[i].username, user) == 0) {
+                vga_print("Username already exists!\n");
+                exists = 1;
+            }
+        }
+        if (exists == 1) {continue;}
+        vga_print("Enter password: ");
+        input(pass);
+        uint32_t passhash = hash(pass);
+        int i = 0;
+        while(user[i]) { line[i] = user[i]; i++; }
+        line[i++] = ':';
+        char hash_str[12];
+        u32_to_str(passhash, hash_str);
+        int j = 0;
+        while(hash_str[j]) { line[i++] = hash_str[j++]; }
+        line[i++] = '\n';
+        line[i] = 0;
+        //Make in disk
+        fs_append("users.txt", (uint8_t*)line, i);
+        //Make in RAM
+        for(i = 0; i < 15 && user[i]; i++) {
+            users[0].username[i] = user[i];
+        }
+        users[user_count].username[i] = 0;
+        users[user_count].passhash = passhash;
+        vga_print("User created!\n");
+        vga_print("Rebooting");
+        delay_ms(500);
+        reboot();
+        break;
+    }
+}
+
+//-----Load-----
+void load_users() {
+    uint8_t buf[1024];
+    int n = fs_read("users.txt", buf, sizeof(buf)-1);
+    if(n >= 0) {
+        buf[n] = 0;
+        char *line = (char*)buf;
+        while(line && *line && user_count < MAX_USERS) {
+            char *end = line;
+            while(*end && *end != '\n') end++;
+            if(*end) *end++ = 0;
+            char *sep = line;
+            while(*sep && *sep != ':') sep++;
+            if(*sep == 0) { line = end; continue; }
+            *sep = 0;
+            char *username = line;
+            char *password = sep+1;
+            for(int i=0;i<16 && username[i];i++)
+                users[user_count].username[i] = username[i];
+            uint32_t hashval = 0;
+            for(int k=0; password[k] >= '0' && password[k] <= '9'; k++) {
+                hashval = hashval*10 + (password[k]-'0');
+            }
+            users[user_count].passhash = hashval;
+            user_count++;
+            line = end;
+        }
+    } else {
+        vga_print("seems like you're new\n");
+        make_user();
+    }
+}
+//Help function
+void clearchar(char *string, int len) {
+    for(int i = 0; i < len; i++) string[i] = 0;
+}
+
+//-------Login-------
+char* login() {
+    vga_clear();
+    vga_print("-----Login-----\n");
+    char username[128];
+    char password[128];
+    int user = 0;
+    int tries = 0;
+    while (1) {
+        if (tries == 3) {
+            return "0";
+        }
+        clearchar(username, sizeof(username));
+        clearchar(password, sizeof(password));
+        vga_print("Username: ");
+        input(username);
+        vga_print("Password: ");
+        input(password);
+        int founduser = 0;
+        for (int i = 0; i < user_count; i++) {
+            if (strcmp(users[i].username, username) == 0) {founduser = 1; user = i;}
+        }
+        if (founduser == 0) {
+            vga_print("User not found!\n");
+            delay_ms(500);
+            tries++;
+            continue;
+        } else {
+            if (strcmp(users[user].username, username) == 0 && users[user].passhash == hash(password)) {
+                vga_print("Welcome ");
+                vga_print(username);
+                vga_print("\n");
+                return users[user].username;
+            } else if(strcmp(users[user].username, username) == 0 && users[user].passhash != hash(password)) {
+                vga_print("Wrong password!\n");
+                delay_ms(500);
+                tries++;
+                continue;
+            }
+        }
+    }
+}
+
+#endif
+
+---.gitignore---
+fs.c
+fs.h
+buildusb.sh
+iso/
+kernel.o
+Doom/
+iso/
+buildgithub.sh
+*.o
+
+
+---LICENSE---
+MIT License
+
+Copyright (c) 2026 Luis-Harz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+---vga.h---
+#ifndef VGA_H
+#define VGA_H
+
+#include "timer.h"
+#include <stdint.h>
+#include "piezo.h"
+#include "font_data.h"
+
+typedef struct {
+    uint32_t flags;
+    uint32_t mem_lower;
+    uint32_t mem_upper;
+    uint32_t boot_device;
+    uint32_t cmdline;
+    uint32_t mods_count;
+    uint32_t mods_addr;
+    uint32_t syms[4];
+    uint32_t mmap_length;
+    uint32_t mmap_addr;
+    uint32_t drives_length;
+    uint32_t drives_addr;
+    uint32_t config_table;
+    uint32_t boot_loader_name;
+    uint32_t apm_table;
+    uint32_t vbe_control_info;
+    uint32_t vbe_mode_info;
+    uint16_t vbe_mode;
+    uint16_t vbe_interface_seg;
+    uint16_t vbe_interface_off;
+    uint16_t vbe_interface_len;
+    uint64_t fb_addr;
+    uint32_t fb_pitch;
+    uint32_t fb_width;
+    uint32_t fb_height;
+    uint8_t  fb_bpp;
+    uint8_t  fb_type;
+} __attribute__((packed)) multiboot_info_t;
+
+// ── Color constants ──────────────────────────────────────────────────────────
+#define BLACK         0x0
+#define BLUE          0x1
+#define GREEN         0x2
+#define CYAN          0x3
+#define RED           0x4
+#define MAGENTA       0x5
+#define BROWN         0x6
+#define LIGHT_GRAY    0x7
+#define DARK_GRAY     0x8
+#define LIGHT_BLUE    0x9
+#define LIGHT_GREEN   0xA
+#define LIGHT_CYAN    0xB
+#define LIGHT_RED     0xC
+#define LIGHT_MAGENTA 0xD
+#define YELLOW        0xE
+#define WHITE         0xF
+
+#define VGA_WIDTH   80
+#define VGA_HEIGHT  25
+#define FULL_BLOCK  0xDB
+
+// ── Externals — defined once in vga.c ───────────────────────────────────────
+extern volatile uint16_t *vga_buffer;
+extern uint8_t  color;
+extern int      cursor_x;
+extern int      cursor_y;
+extern int      use_framebuffer;
+extern uint8_t *fb_addr;
+extern uint32_t fb_pitch;
+extern uint32_t fb_width;
+extern uint32_t fb_height;
+extern uint8_t  fb_bpp;
+static const uint32_t vga_to_rgb[16];
+
+// ── Function declarations ────────────────────────────────────────────────────
+void vga_init(multiboot_info_t *mb);
+void vga_clear(void);
+void vga_print(const char *str);
+void vga_putc(char c);
+void vga_scroll(void);
+void vga_backspace(char *command, int *cmd_index);
+void update_cursor(int x, int y);
+void put_block(int x, int y, uint8_t fg, uint8_t bg);
+int  vga_used_lines(void);
+void logo(char *lg);
+void colortest(void (*delay_fn)(uint32_t));
+void fb_draw_triangle_outline(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color);
+void fb_draw_triangle_outline_thick(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t color,int thickness);
+void fb_drawchar(int cx, int cy, char c, uint8_t fg, uint8_t bg);
+void logo_crash(char *lg);
+
+static inline uint32_t vga_to_rgb_func(uint32_t color) {
+    if (color <= 15) {
+        static const uint32_t vga_to_rgb[16] = {
+            0x000000, // BLACK
+            0x0000AA, // BLUE
+            0x00AA00, // GREEN
+            0x00AAAA, // CYAN
+            0xAA0000, // RED
+            0xAA00AA, // MAGENTA
+            0xAA5500, // BROWN
+            0xAAAAAA, // LIGHT_GRAY
+            0x555555, // DARK_GRAY
+            0x5555FF, // LIGHT_BLUE
+            0x55FF55, // LIGHT_GREEN
+            0x55FFFF, // LIGHT_CYAN
+            0xFF5555, // LIGHT_RED
+            0xFF55FF, // LIGHT_MAGENTA
+            0xFFFF55, // YELLOW
+            0xFFFFFF, // WHITE
+        };
+        return vga_to_rgb[color];
+    }
+    return color;
+}
+void fb_putpixel(uint32_t x, uint32_t y, uint32_t c);
+#endif // VGA_H
+
+---ports.h---
+#ifndef PORTS_H
+#define PORTS_H
+
+#include <stdint.h>
+
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint8_t inb(uint16_t port) {
+    uint8_t val;
+    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+static inline uint16_t inw(uint16_t port) {
+    uint16_t val;
+    __asm__ volatile ("inw %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+#endif
+
+---idt.c---
+#include "idt.h"
+#include "multitasking/irq0.c"
+#include "mouse.h"
+
+struct idt_entry idt[256];
+struct idt_ptr   idtp;
+
+char crash_logo[] =
+    "00000001\n"
+    "000000101\n"
+    "0000010101\n"
+    "00001001001\n"
+    "000100000001\n"
+    "0010000100001\n"
+    "01000000000001\n"
+    "111111111111111\n";
+
+void unhandled_irq() {
+    outb(0xA0, 0x20);
+    outb(0x20, 0x20);
+}
+
+__asm__(
+    ".section .text\n\t"
+    ".extern unhandled_irq\n\t"
+    ".global unhandled_irq_stub\n\t"
+    "unhandled_irq_stub:\n\t"
+    "cli\n\t"
+    "pusha\n\t"
+    "call unhandled_irq\n\t"
+    "popa\n\t"
+    "sti\n\t"
+    "iret\n\t"
+);
+extern void unhandled_irq_stub();
+
+#define IRQ_STUB(num, handler) \
+    extern void irq##num##_stub(); \
+    __asm__( \
+        ".global irq" #num "_stub\n\t" \
+        "irq" #num "_stub:\n\t" \
+        "cli\n\t" \
+        "pusha\n\t" \
+        "call " #handler "\n\t" \
+        "popa\n\t" \
+        "sti\n\t" \
+        "iret\n\t" \
+    );
+
+
+void generic_crash_handler(struct interrupt_frame* frame) {
+    vga_clear();
+    logo_crash(crash_logo);
+    for (int i = 0; i < 2; i++) {
+        vga_print(" ");
+    }
+    vga_print("CPU CRASH!\n");
+    char buf[9];
+    for (int i = 7; i >= 0; i--) {
+        int nib = (frame->ip >> (i*4)) & 0xF;
+        buf[7-i] = nib < 10 ? '0'+nib : 'A'+(nib-10);
+    }
+    buf[8] = 0;
+    vga_print(buf);
+    while(1) { __asm__("hlt"); }
+}
+
+#define EXCEPTION_STUB(num) \
+extern void isr##num(); \
+__asm__( \
+".global isr" #num "\n\t" \
+"isr" #num ":\n\t" \
+"cli\n\t" \
+"push %%eax\n\t" \
+"push %%ecx\n\t" \
+"push %%edx\n\t" \
+"push %%ebx\n\t" \
+"push %%ebp\n\t" \
+"push %%esi\n\t" \
+"push %%edi\n\t" \
+"lea 28(%%esp), %%eax\n\t" \
+"push %%eax\n\t" \
+"call generic_crash_handler\n\t" \
+"hlt\n\t" \
+);
+
+void irq14_handler() {
+    outb(0xA0, 0x20);  // EOI to slave PIC
+    outb(0x20, 0x20);  // EOI to master PIC
+}
+
+extern void isr0();  extern void isr1();  extern void isr2();  extern void isr3();
+extern void isr4();  extern void isr5();  extern void isr6();  extern void isr7();
+extern void isr8();  extern void isr9();  extern void isr10(); extern void isr11();
+extern void isr12(); extern void isr13(); extern void isr14(); extern void isr15();
+extern void isr16(); extern void isr17(); extern void isr18(); extern void isr19();
+extern void isr20(); extern void isr21(); extern void isr22(); extern void isr23();
+extern void isr24(); extern void isr25(); extern void isr26(); extern void isr27();
+extern void isr28(); extern void isr29(); extern void isr30(); extern void isr31();
+
+void pic_remap() {
+    outb(0x20, 0x11);
+    outb(0xA0, 0x11);
+    outb(0x21, 0x20);
+    outb(0xA1, 0x28);
+    outb(0x21, 0x04);
+    outb(0xA1, 0x02);
+    outb(0x21, 0x01);
+    outb(0xA1, 0x01);
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+}
+
+void idt_init() {
+    __asm__("cli");
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+    for (int i = 0; i < 256; i++)
+        idt_set_gate(i, (uint32_t)unhandled_irq_stub, 0x08, 0x8E);
+
+    idt_set_gate(0,  (uint32_t)isr0,  0x08, 0x8E);
+    idt_set_gate(1,  (uint32_t)isr1,  0x08, 0x8E);
+    idt_set_gate(2,  (uint32_t)isr2,  0x08, 0x8E);
+    idt_set_gate(3,  (uint32_t)isr3,  0x08, 0x8E);
+    idt_set_gate(4,  (uint32_t)isr4,  0x08, 0x8E);
+    idt_set_gate(5,  (uint32_t)isr5,  0x08, 0x8E);
+    idt_set_gate(6,  (uint32_t)isr6,  0x08, 0x8E);
+    idt_set_gate(7,  (uint32_t)isr7,  0x08, 0x8E);
+    idt_set_gate(8,  (uint32_t)isr8,  0x08, 0x8E);
+    idt_set_gate(9,  (uint32_t)isr9,  0x08, 0x8E);
+    idt_set_gate(10, (uint32_t)isr10, 0x08, 0x8E);
+    idt_set_gate(11, (uint32_t)isr11, 0x08, 0x8E);
+    idt_set_gate(12, (uint32_t)isr12, 0x08, 0x8E);
+    idt_set_gate(13, (uint32_t)isr13, 0x08, 0x8E);
+    idt_set_gate(14, (uint32_t)isr14, 0x08, 0x8E);
+    idt_set_gate(15, (uint32_t)isr15, 0x08, 0x8E);
+    idt_set_gate(16, (uint32_t)isr16, 0x08, 0x8E);
+    idt_set_gate(17, (uint32_t)isr17, 0x08, 0x8E);
+    idt_set_gate(18, (uint32_t)isr18, 0x08, 0x8E);
+    idt_set_gate(19, (uint32_t)isr19, 0x08, 0x8E);
+    idt_set_gate(20, (uint32_t)isr20, 0x08, 0x8E);
+    idt_set_gate(21, (uint32_t)isr21, 0x08, 0x8E);
+    idt_set_gate(22, (uint32_t)isr22, 0x08, 0x8E);
+    idt_set_gate(23, (uint32_t)isr23, 0x08, 0x8E);
+    idt_set_gate(24, (uint32_t)isr24, 0x08, 0x8E);
+    idt_set_gate(25, (uint32_t)isr25, 0x08, 0x8E);
+    idt_set_gate(26, (uint32_t)isr26, 0x08, 0x8E);
+    idt_set_gate(27, (uint32_t)isr27, 0x08, 0x8E);
+    idt_set_gate(28, (uint32_t)isr28, 0x08, 0x8E);
+    idt_set_gate(29, (uint32_t)isr29, 0x08, 0x8E);
+    idt_set_gate(30, (uint32_t)isr30, 0x08, 0x8E);
+    idt_set_gate(31, (uint32_t)isr31, 0x08, 0x8E);
+    extern void irq0_stub();
+    idt_set_gate(0x20, (uint32_t)irq0_stub, 0x08, 0x8E);
+    idt_load();
+    pic_remap();
+    outb(0xA1, 0xAF);
+
+    __asm__("sti");
+}
+
+---timer.c---
+#include "timer.h"
+#include "ports.h"
+
+static uint32_t tsc_ticks_per_ms = 0;
+
+static void tsc_calibrate_pit(void) {
+    outb(0x43, 0xB0);
+    outb(0x42, 0xFF);
+    outb(0x42, 0xFF);
+    uint8_t val = (inb(0x61) & 0xFC) | 0x01;
+    outb(0x61, val);
+    uint64_t start = rdtsc();
+    while (inb(0x61) & 0x20);
+    while (!(inb(0x61) & 0x20));
+    uint64_t end = rdtsc();
+    uint32_t elapsed = (uint32_t)(end - start);
+    tsc_ticks_per_ms = elapsed / 55;
+    if (tsc_ticks_per_ms == 0)
+        tsc_ticks_per_ms = 1000000;
+}
+
+static void tsc_calibrate_cpuid(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile ("cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x15));
+    if (!eax || !ebx || !ecx) return;
+    tsc_ticks_per_ms = (ecx / 1000) * (ebx / eax);
+}
+
+void timer_init(void) {
+    tsc_calibrate_cpuid();
+    if (!tsc_ticks_per_ms)
+        tsc_calibrate_pit();
+    if (!tsc_ticks_per_ms)
+        tsc_ticks_per_ms = 1000000;
+}
+
+void delay_ms(uint32_t ms) {
+    if (tsc_ticks_per_ms == 0) return;
+    uint64_t ticks = (uint64_t)tsc_ticks_per_ms * ms;
+    uint64_t start = rdtsc();
+    while ((rdtsc() - start) < ticks);
+}
+
+uint64_t ms_since_startup(void) {
+    uint64_t ticks = rdtsc();
+    return ticks / tsc_ticks_per_ms;
+}
+
+---README.md---
+# TinyOS
+A OS written by me in C.
+It's really lightweight.
+## Why?
+i made it because i wanted to learn a bit of Bare Metal C or also called freestanding C.
+## Infos
+It has about 2500 Lines of code right now. <br>
+the filesystem is persistent. <br>
+you have to emulate it with VGA(because it uses VGA Framebuffer, well now it kinda works on HDMI) <br>
+It only supports english keyboard layout <br>
+It doesn't work on USB drives because USB driver is missing. <br>
+SATA disks work.
+
+
+---keyboard.h---
+#ifndef KEYBOARD_H
+#define KEYBOARD_H
+
+#include "ports.h"
+#include <stdint.h>
+
+#define KEYBOARD_DATA   0x60
+#define KEYBOARD_STATUS 0x64
+
+extern char scancode_to_ascii[256];
+extern char scancode_upper[256];
+
+void itoa(int num, char *str);
+int atoi(const char *str);
+void itoa2(int num, char *str);
+uint16_t keyboard_read_scancode(void);
+
+#endif
+
+---pci.h---
+#ifndef PCI_DRIVER_H
+#define PCI_DRIVER_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include "vga.h"
+
+typedef uint8_t  u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+
+/* =====================================================================
+ * PCI CONFIGURATION SPACE
+ * ===================================================================== */
+
+#define PCI_CONFIG_ADDRESS 0xCF8
+#define PCI_CONFIG_DATA    0xCFC
+
+#define PCI_ADDR(bus, dev, func, reg) \
+    ( (u32)(1u << 31)                 | \
+      ((u32)(bus)  & 0xFFu)  << 16    | \
+      ((u32)(dev)  & 0x1Fu)  << 11    | \
+      ((u32)(func) & 0x07u)  << 8     | \
+      ((u32)(reg)  & 0xFCu) )
+
+/* Standard config offsets */
+#define PCI_REG_VENDOR_ID     0x00
+#define PCI_REG_DEVICE_ID     0x02
+#define PCI_REG_COMMAND       0x04
+#define PCI_REG_STATUS        0x06
+#define PCI_REG_REVISION      0x08
+#define PCI_REG_PROG_IF       0x09
+#define PCI_REG_SUBCLASS      0x0A
+#define PCI_REG_CLASS         0x0B
+#define PCI_REG_HEADER_TYPE   0x0E
+#define PCI_REG_BAR0          0x10
+#define PCI_REG_BAR1          0x14
+#define PCI_REG_BAR2          0x18
+#define PCI_REG_BAR3          0x1C
+#define PCI_REG_BAR4          0x20
+#define PCI_REG_BAR5          0x24
+#define PCI_REG_SUBSYS_VENDOR 0x2C
+#define PCI_REG_SUBSYS_ID     0x2E
+#define PCI_REG_IRQ_LINE      0x3C
+#define PCI_REG_IRQ_PIN       0x3D
+
+/* COMMAND bits */
+#define PCI_CMD_IO_SPACE    (1u << 0)
+#define PCI_CMD_MEM_SPACE   (1u << 1)
+#define PCI_CMD_BUS_MASTER  (1u << 2)
+
+/* HEADER TYPE */
+#define PCI_HEADER_NORMAL     0x00
+#define PCI_HEADER_PCI_BRIDGE 0x01
+#define PCI_HEADER_CARDBUS    0x02
+#define PCI_HEADER_MULTI_FUNC 0x80
+
+#define PCI_VENDOR_NONE 0xFFFF
+
+/* Bus limits */
+#define PCI_MAX_BUS      256
+#define PCI_MAX_DEV      32
+#define PCI_MAX_FUNC     8
+#define PCI_MAX_BARS     6
+#define PCI_MAX_DEVICES  64
+
+/* =====================================================================
+ * BAR DESCRIPTOR
+ * ===================================================================== */
+
+typedef enum {
+    PCI_BAR_NONE = 0,
+    PCI_BAR_IO,
+    PCI_BAR_MEM32,
+    PCI_BAR_MEM64,
+} pci_bar_type_t;
+
+typedef struct {
+    pci_bar_type_t type;
+    u64            base;     /* physical or I/O port */
+    u64            size;     /* bytes */
+    bool           prefetch;
+} pci_bar_t;
+
+/* =====================================================================
+ * DEVICE DESCRIPTOR
+ * ===================================================================== */
+
+typedef struct {
+    u8  bus;
+    u8  device;
+    u8  function;
+
+    u16 vendor_id;
+    u16 device_id;
+    u16 subsys_vendor;
+    u16 subsys_id;
+    u8  class_code;
+    u8  subclass;
+    u8  prog_if;
+    u8  revision;
+
+    pci_bar_t bars[PCI_MAX_BARS];
+
+    u8  irq_line;
+    u8  irq_pin;
+
+    bool valid;
+    bool multifunction;
+} pci_device_t;
+
+typedef struct {
+    pci_device_t devices[PCI_MAX_DEVICES];
+    size_t       count;
+} pci_bus_t;
+
+/* =====================================================================
+ * LOW-LEVEL I/O
+ * ===================================================================== */
+
+static inline void _outl(u16 port, u32 val) {
+    __asm__ volatile ("outl %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline u32 _inl(u16 port) {
+    u32 val;
+    __asm__ volatile ("inl %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+static inline void _outw(uint16_t port, uint16_t val) {
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint16_t _inw(uint16_t port) {
+    uint16_t val;
+    __asm__ volatile ("inw %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+/* =====================================================================
+ * CONFIG READ/WRITE
+ * ===================================================================== */
+
+static inline u32 pci_cfg_read32(u8 bus, u8 dev, u8 func, u8 reg) {
+    _outl(PCI_CONFIG_ADDRESS, PCI_ADDR(bus, dev, func, reg));
+    return _inl(PCI_CONFIG_DATA);
+}
+
+static inline u16 pci_cfg_read16(u8 bus, u8 dev, u8 func, u8 reg) {
+    u32 dword = pci_cfg_read32(bus, dev, func, reg & ~0x3u);
+    return (u16)(dword >> ((reg & 2u) * 8u));
+}
+
+static inline u8 pci_cfg_read8(u8 bus, u8 dev, u8 func, u8 reg) {
+    u32 dword = pci_cfg_read32(bus, dev, func, reg & ~0x3u);
+    return (u8)(dword >> ((reg & 3u) * 8u));
+}
+
+static inline void pci_cfg_write32(u8 bus, u8 dev, u8 func, u8 reg, u32 val) {
+    _outl(PCI_CONFIG_ADDRESS, PCI_ADDR(bus, dev, func, reg));
+    _outl(PCI_CONFIG_DATA, val);
+}
+
+static inline void pci_cfg_write16(u8 bus, u8 dev, u8 func, u8 reg, u16 val) {
+    u32 dword = pci_cfg_read32(bus, dev, func, reg & ~0x3u);
+    u32 shift = (reg & 2u) * 8u;
+    dword = (dword & ~(0xFFFFu << shift)) | ((u32)val << shift);
+    pci_cfg_write32(bus, dev, func, reg & ~0x3u, dword);
+}
+
+static inline void pci_cfg_write8(u8 bus, u8 dev, u8 func, u8 reg, u8 val) {
+    u32 dword = pci_cfg_read32(bus, dev, func, reg & ~0x3u);
+    u32 shift = (reg & 3u) * 8u;
+    dword = (dword & ~(0xFFu << shift)) | ((u32)val << shift);
+    pci_cfg_write32(bus, dev, func, reg & ~0x3u, dword);
+}
+
+/* =====================================================================
+ * BAR PROBING
+ * ===================================================================== */
+
+static inline bool pci_probe_bar(u8 bus, u8 dev, u8 func,
+    u8 idx, pci_bar_t *out) {
+    u8  reg  = (u8)(PCI_REG_BAR0 + idx * 4u);
+    u32 orig = pci_cfg_read32(bus, dev, func, reg);
+    if (orig == 0xFFFFFFFFu) {
+        out->type = PCI_BAR_NONE;
+        out->base = 0; out->size = 0; out->prefetch = false;
+        return false;
+    }
+
+    pci_cfg_write32(bus, dev, func, reg, 0xFFFFFFFFu);
+    u32 mask = pci_cfg_read32(bus, dev, func, reg);
+    pci_cfg_write32(bus, dev, func, reg, orig);
+
+    // if mask is 0 after write-all-ones, BAR truly not implemented
+    if (mask == 0 || mask == 0xFFFFFFFFu) {
+        out->type = PCI_BAR_NONE;
+        out->base = 0; out->size = 0; out->prefetch = false;
+        return false;
+    }
+
+    if (orig & 0x1u) {
+        out->type = PCI_BAR_IO;
+        out->base = (u64)(orig & 0xFFFCu);
+        u32 size_mask = mask & 0xFFFCu;
+        out->size = size_mask ? (u64)(~size_mask + 1u) : 0;
+        out->prefetch = false;
+    } else {
+        u8 width = (u8)((orig >> 1u) & 0x3u);
+        out->prefetch = ((orig >> 3u) & 0x1u) != 0;
+        if (width == 0x2u) {
+            u8  reg_hi  = (u8)(reg + 4u);
+            u32 orig_hi = pci_cfg_read32(bus, dev, func, reg_hi);
+            pci_cfg_write32(bus, dev, func, reg_hi, 0xFFFFFFFFu);
+            u32 mask_hi = pci_cfg_read32(bus, dev, func, reg_hi);
+            pci_cfg_write32(bus, dev, func, reg_hi, orig_hi);
+            u64 full_mask = ((u64)mask_hi << 32u) | (u64)(mask & 0xFFFFFFF0u);
+            out->type = PCI_BAR_MEM64;
+            out->base = ((u64)orig_hi << 32u) | (u64)(orig & 0xFFFFFFF0u);
+            out->size = full_mask ? ~full_mask + 1u : 0;
+        } else {
+            u32 addr_mask = mask & 0xFFFFFFF0u;
+            out->type = PCI_BAR_MEM32;
+            out->base = (u64)(orig & 0xFFFFFFF0u);
+            out->size = addr_mask ? (u64)(~addr_mask + 1u) : 0;
+        }
+    }
+    return true;
+}
+
+/* =====================================================================
+ * DEVICE CONFIG SNAPSHOT
+ * ===================================================================== */
+
+static inline bool pci_scan_device(u8 bus, u8 dev,
+                                   u8 func, pci_device_t *out) {
+    u16 vendor = pci_cfg_read16(bus, dev, func, PCI_REG_VENDOR_ID);
+    if (vendor == PCI_VENDOR_NONE)
+        return false;
+
+    out->bus      = bus;
+    out->device   = dev;
+    out->function = func;
+    out->valid    = true;
+
+    out->vendor_id     = vendor;
+    out->device_id     = pci_cfg_read16(bus, dev, func, PCI_REG_DEVICE_ID);
+    out->class_code    = pci_cfg_read8 (bus, dev, func, PCI_REG_CLASS);
+    out->subclass      = pci_cfg_read8 (bus, dev, func, PCI_REG_SUBCLASS);
+    out->prog_if       = pci_cfg_read8 (bus, dev, func, PCI_REG_PROG_IF);
+    out->revision      = pci_cfg_read8 (bus, dev, func, PCI_REG_REVISION);
+    out->subsys_vendor = pci_cfg_read16(bus, dev, func, PCI_REG_SUBSYS_VENDOR);
+    out->subsys_id     = pci_cfg_read16(bus, dev, func, PCI_REG_SUBSYS_ID);
+    out->irq_line      = pci_cfg_read8 (bus, dev, func, PCI_REG_IRQ_LINE);
+    out->irq_pin       = pci_cfg_read8 (bus, dev, func, PCI_REG_IRQ_PIN);
+
+    u8 header = pci_cfg_read8(bus, dev, func, PCI_REG_HEADER_TYPE);
+    out->multifunction = (header & PCI_HEADER_MULTI_FUNC) != 0;
+
+    /* Clear BARs first */
+    for (u8 i = 0; i < PCI_MAX_BARS; i++) {
+        out->bars[i].type = PCI_BAR_NONE;
+        out->bars[i].base = 0;
+        out->bars[i].size = 0;
+        out->bars[i].prefetch = false;
+    }
+    if ((header & 0x7Fu) == PCI_HEADER_NORMAL) {
+        for (u8 i = 0; i < PCI_MAX_BARS; ) {
+            if (!pci_probe_bar(bus, dev, func, i, &out->bars[i])) {
+                i++; continue;
+            }
+            if (out->bars[i].type == PCI_BAR_MEM64 && i + 1 < PCI_MAX_BARS) {
+                out->bars[i + 1].type = PCI_BAR_NONE; // mark high dword as consumed
+                i += 2; // skip both lo and hi
+            } else {
+                i++;
+            }
+        }
+    }
+
+    return true;
+}
+
+static inline void zero_mem(void *ptr, u32 size) {
+    u8 *p = (u8 *)ptr;
+    for (u32 i = 0; i < size; i++) p[i] = 0;
+}
+
+static inline void copy_mem(void *dst, const void *src, u32 size) {
+    u8 *d = (u8 *)dst;
+    const u8 *s = (const u8 *)src;
+    for (u32 i = 0; i < size; i++) d[i] = s[i];
+}
+
+/* =====================================================================
+ * BUS ENUMERATION
+ * ===================================================================== */
+
+static pci_device_t _pci_tmp;
+
+static void dbg(const char *msg) {
+    vga_print(msg);
+}
+
+static void dbg_ok(void) {
+    vga_print(" OK");
+}
+
+static void dbg_fail(void) {
+    vga_print(" FAIL");
+}
+
+static inline void pci_enumerate(pci_bus_t *out) {
+    if (!out) return;
+    out->count = 0;
+    zero_mem(out->devices, sizeof(out->devices));
+
+    for (u8 bus = 0; bus < 4; bus++) {
+        for (u8 dev = 0; dev < PCI_MAX_DEV; dev++) {
+            u16 vendor = pci_cfg_read16(bus, dev, 0, PCI_REG_VENDOR_ID);
+            if (vendor == 0xFFFFu || vendor == 0x0000u) continue;
+
+            u8 header  = pci_cfg_read8(bus, dev, 0, PCI_REG_HEADER_TYPE);
+            u8 max_func = (header & PCI_HEADER_MULTI_FUNC) ? PCI_MAX_FUNC : 1;
+
+            for (u8 func = 0; func < max_func; func++) {
+                vendor = pci_cfg_read16(bus, dev, func, PCI_REG_VENDOR_ID);
+                if (vendor == 0xFFFFu || vendor == 0x0000u) continue;
+                if (out->count >= PCI_MAX_DEVICES) return;
+
+                pci_device_t *d = &out->devices[out->count];
+                zero_mem(d, sizeof(*d));
+                if (!pci_scan_device(bus, dev, func, d)) continue;
+                if (d->vendor_id == 0xFFFFu || d->vendor_id == 0) continue;
+
+                out->count++;
+
+                vga_print("PCI ");
+                if (d->vendor_id == 0x8086)      vga_print("Intel");
+                else if (d->vendor_id == 0x10DE) vga_print("NVIDIA");
+                else if (d->vendor_id == 0x1002) vga_print("AMD");
+                else if (d->vendor_id == 0x1234) vga_print("BOCHS");
+                else                             vga_print("????");
+
+                vga_print(" class:");
+                if      (d->class_code == 0x01) vga_print("storage");
+                else if (d->class_code == 0x02) vga_print("net");
+                else if (d->class_code == 0x03) vga_print("display");
+                else if (d->class_code == 0x06) vga_print("bridge");
+                else                            vga_print("?");
+                vga_print("\n");
+            }
+        }
+    }
+    vga_print("PCI done\n");
+}
+
+/* =====================================================================
+ * SIMPLE LOOKUPS
+ * ===================================================================== */
+
+static inline pci_device_t *pci_find_device(pci_bus_t *bus,
+                                            u16 vendor_id, u16 device_id) {
+    for (size_t i = 0; i < bus->count; i++) {
+        pci_device_t *d = &bus->devices[i];
+        if ((vendor_id == 0 || d->vendor_id == vendor_id) &&
+            (device_id == 0 || d->device_id == device_id))
+            return d;
+    }
+    return NULL;
+}
+
+static inline pci_device_t *pci_find_class(pci_bus_t *bus,
+                                           u8 class_code, u8 subclass) {
+    for (size_t i = 0; i < bus->count; i++) {
+        pci_device_t *d = &bus->devices[i];
+        if (d->class_code == class_code && d->subclass == subclass)
+            return d;
+    }
+    return NULL;
+}
+
+/* =====================================================================
+ * COMMAND HELPERS
+ * ===================================================================== */
+
+static inline void pci_enable_io(const pci_device_t *d) {
+    u16 cmd = pci_cfg_read16(d->bus, d->device, d->function, PCI_REG_COMMAND);
+    pci_cfg_write16(d->bus, d->device, d->function,
+                    PCI_REG_COMMAND, cmd | PCI_CMD_IO_SPACE);
+}
+
+static inline void pci_enable_mmio(const pci_device_t *d) {
+    u16 cmd = pci_cfg_read16(d->bus, d->device, d->function, PCI_REG_COMMAND);
+    pci_cfg_write16(d->bus, d->device, d->function,
+                    PCI_REG_COMMAND, cmd | PCI_CMD_MEM_SPACE);
+}
+
+static inline void pci_enable_busmaster(const pci_device_t *d) {
+    u16 cmd = pci_cfg_read16(d->bus, d->device, d->function, PCI_REG_COMMAND);
+    pci_cfg_write16(d->bus, d->device, d->function,
+                    PCI_REG_COMMAND, cmd | PCI_CMD_BUS_MASTER);
+}
+
+#endif /* PCI_DRIVER_H */
+
+
+---asm.h---
+#ifndef ASM_H
+#define ASM_H
+
+static inline void cli(void)
+{
+    __asm__ volatile("cli");
+}
+
+static inline void sti(void)
+{
+    __asm__ volatile("sti");
+}
+
+#endif
+
+---disk.img---
+[binary file, skipping]
+
+---version.txt---
+0.0.5
+
+
+---boot.asm---
+global _start
+extern kernel_main
+extern _bss_start
+extern _bss_end
+
+section .multiboot
+align 4
+dd 0x1BADB002
+dd 0x00000007
+dd -(0x1BADB002 + 0x00000007)
+dd 0, 0, 0, 0, 0, 0, 0
+dd 800
+dd 600
+dd 32
+
+section .bootstrap_stack nobits alloc write
+align 16
+stack_bottom:
+    resb 1048576
+stack_top:
+
+section .text
+_start:
+    mov esp, stack_top
+    push ebx        ; multiboot info pointer  
+    push eax        ; multiboot magic
+    mov al, 0xFF
+    out 0x21, al
+    out 0xA1, al
+
+    ; Zero BSS
+    mov edi, _bss_start
+    mov ecx, _bss_end
+    sub ecx, edi
+    shr ecx, 2
+    xor eax, eax
+    rep stosd
+    call kernel_main
+    cli
+.hang:
+    hlt
+    jmp .hang
+
+---diskio_impl.c---
+#include "fs/fat/ff.h"
+#include "fs/fat/diskio.h"
+
+uint32_t fat_partition_lba = 0;
+
+extern int ata_read(uint8_t *buf, uint32_t lba, uint32_t count);
+extern int ata_write(const uint8_t *buf, uint32_t lba, uint32_t count);
+
+DSTATUS disk_initialize(BYTE pdrv) { return 0; }
+DSTATUS disk_status(BYTE pdrv)     { return 0; }
+
+DRESULT disk_read(BYTE pdrv, BYTE *buff, DWORD sector, UINT count) {
+    return ata_read(buff, sector + fat_partition_lba, count) == 0 ? RES_OK : RES_ERROR;
+}
+
+DRESULT disk_write(BYTE pdrv, const BYTE *buff, DWORD sector, UINT count) {
+    return ata_write(buff, sector + fat_partition_lba, count) == 0 ? RES_OK : RES_ERROR;
+}
+
+DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
+    switch (cmd) {
+        case CTRL_SYNC:       return RES_OK;
+        case GET_SECTOR_SIZE: *(WORD *)buff  = 512; return RES_OK;
+        case GET_BLOCK_SIZE:  *(DWORD *)buff = 1;   return RES_OK;
+    }
+    return RES_PARERR;
+}
+DWORD get_fattime(void) {
+    return ((DWORD)(2025 - 1980) << 25) | ((DWORD)1 << 21) | ((DWORD)1 << 16);
+}
+
+---TinyOS.iso---
+[binary file, skipping]
+
+---fs.c---
+#include <stdint.h>
+#include "fs.h"
+#include "fs/fat/ff.h"
+
+static int fs_strlen(const char *s) {
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static uint8_t hex_to_byte(char high, char low) {
+    uint8_t val = 0;
+    if (high >= '0' && high <= '9') val += (high - '0') << 4;
+    else if (high >= 'A' && high <= 'F') val += (high - 'A' + 10) << 4;
+    else if (high >= 'a' && high <= 'f') val += (high - 'a' + 10) << 4;
+
+    if (low >= '0' && low <= '9') val += (low - '0');
+    else if (low >= 'A' && low <= 'F') val += (low - 'A' + 10);
+    else if (low >= 'a' && low <= 'f') val += (low - 'a' + 10);
+
+    return val;
+}
+
+static uint32_t parse_size(const char *str) {
+    uint32_t val = 0;
+    while (*str >= '0' && *str <= '9') {
+        val = val * 10 + (*str - '0');
+        str++;
+    }
+    return val;
+}
+
+/* fs_init: mounts the FAT volume */
+void fs_init(fs_t *fs) {
+    f_mount(&fs->fatfs, "0:", 1);
+}
+
+/* fs_deinit: unmounts the FAT volume */
+void fs_deinit(fs_t *fs) {
+    (void)fs;
+    f_unmount("0:");
+}
+
+/* fs_read: reads a file into buf, returns bytes read or -1 on error */
+int fs_read(const char *path, uint8_t *buf, uint32_t capacity) {
+    FIL fil;
+    UINT br;
+
+    if (f_open(&fil, path, FA_READ) != FR_OK)
+        return -1;
+
+    FRESULT res = f_read(&fil, buf, capacity, &br);
+    f_close(&fil);
+
+    return (res == FR_OK) ? (int)br : -1;
+}
+
+/* fs_write: creates or overwrites a file with the given content */
+int fs_write(const char *path, const uint8_t *content, uint32_t size) {
+    FIL fil;
+    UINT bw;
+
+    if (f_open(&fil, path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+        return -1;
+
+    FRESULT res = f_write(&fil, content, size, &bw);
+    f_close(&fil);
+
+    return (res == FR_OK && bw == size) ? 0 : -1;
+}
+
+/* fs_delete: removes a file */
+int fs_delete(const char *path) {
+    return (f_unlink(path) == FR_OK) ? 0 : -1;
+}
+
+/* fs_list: calls callback once per file in the root directory */
+void fs_list(void (*callback)(const char *path)) {
+    DIR dir;
+    FILINFO fno;
+
+    if (f_opendir(&dir, "0:/") != FR_OK)
+        return;
+
+    while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
+        if (fno.fattrib & AM_DIR) continue;
+        char buf[FF_LFN_BUF + 2];
+        int i = 0;
+        while (fno.fname[i] && i < FF_LFN_BUF) { buf[i] = fno.fname[i]; i++; }
+        buf[i++] = '\n';
+        buf[i]   = 0;
+        callback(buf);
+    }
+
+    f_closedir(&dir);
+}
+
+/* run_program: loads a hex-encoded binary from a FAT file and executes it.
+   Expected file format:
+     :SIZE=<decimal byte count>\n
+     :STARTCODE:\n
+     <hex pairs, space or newline separated>
+*/
+void run_program(const char *path) {
+    FIL fil;
+    UINT br;
+
+    static uint8_t file_buf[4096];
+
+    if (f_open(&fil, path, FA_READ) != FR_OK) return;
+    FRESULT res = f_read(&fil, file_buf, sizeof(file_buf) - 1, &br);
+    f_close(&fil);
+    if (res != FR_OK) return;
+
+    file_buf[br] = 0;
+    char *p = (char *)file_buf;
+
+    /* expect ":SIZE=" prefix */
+    const char *size_marker = ":SIZE=";
+    int slen = fs_strlen(size_marker);
+    for (int i = 0; i < slen; i++)
+        if (p[i] != size_marker[i]) return;
+    p += slen;
+
+    uint32_t size = parse_size(p);
+    while (*p && *p != '\n') p++;
+    if (*p == '\n') p++;
+
+    /* expect ":STARTCODE:\n" */
+    const char *code_marker = ":STARTCODE:\n";
+    int clen = fs_strlen(code_marker);
+    for (int i = 0; i < clen; i++)
+        if (p[i] != code_marker[i]) return;
+    p += clen;
+
+    /* decode hex pairs into exec memory */
+    uint8_t *exec_mem = (uint8_t *)0x1000;
+    uint32_t bytes_parsed = 0;
+
+    while (bytes_parsed < size && p[0] && p[1]) {
+        while (*p == ' ' || *p == '\n') p++;
+        exec_mem[bytes_parsed++] = hex_to_byte(p[0], p[1]);
+        p += 2;
+    }
+
+    uint32_t *stack = (uint32_t *)0x8000;
+    asm volatile("movl %0, %%esp" : : "r"(stack));
+    void (*func)() = (void (*)())exec_mem;
+    func();
+}
+
+//Append at end of file
+int fs_append(const char *path, const uint8_t *content, uint32_t size) {
+    FIL fil;
+    UINT bw;
+    if (f_open(&fil, path, FA_WRITE | FA_OPEN_ALWAYS) != FR_OK) {
+        return -1;
+    }
+
+    if (f_lseek(&fil, f_size(&fil)) != FR_OK) {
+        f_close(&fil);
+        return -1;
+    }
+
+    FRESULT res = f_write(&fil, content, size, &bw);
+    f_close(&fil);
+    return (res == FR_OK && bw == size) ? 0 : -1;
+}
+
+---input.h---
+#ifndef INPUT_H
+#define INPUT_H
+#include "keyboard.h"
+#include <stdint.h>
+#include "vga.h"
+void input(char *input) {
+    char command[128];
+    int cmd_index = 0;
+    char c;
+    while (1) {
+        uint8_t scancode = keyboard_read_scancode();
+        int shift_pressed = 0;
+        if (scancode == 0x2A || scancode == 0x36) {
+            shift_pressed = 1;
+        } else if (scancode == 0xAA || scancode == 0xB6) { 
+            shift_pressed = 0;
+        }
+        if (shift_pressed == 0) {
+            c = scancode_to_ascii[scancode];
+        } else {
+            c = scancode_upper[scancode];
+        }
+        if (c) {
+            if (c == '\n') {
+                vga_putc(c);
+                command[cmd_index] = 0;
+                cmd_index = 0;
+                for (int i = 0; i < 127; i++) {
+                    input[i] = command[i];
+                }
+                for (int i = 0; i < 128; i++)
+                    command[i] = 0;
+                break;
+            } else if (c == '\b') {
+                vga_backspace(command, &cmd_index);
+            } else {
+                vga_putc(c);
+                if (cmd_index < 127) {
+                    command[cmd_index++] = c;
+                }
+            }
+        }
+    }
+}
+#endif
+
+---kernel.c---
+#include <stdint.h>
+#include "fs.c"
+#include "snake.h"
+#include "asm.h"
+#include "vga.h"
+#include "keyboard.h"
+#include "timer.h"
+#include "rtc.h"
+#include "idt.h"
+#include "gdt.h"
+#include "piezo.h"
+#include "fs/ata/ata.h"
+#include "login.h"
+#include "libc.h"
+#include "mouse.h"
+#include "fs/fat/ff.h"
+#include "fs/fat/diskio.h"
+#include "pci.h"
+#include "kernel.h"
+#include "pong.h"
+#define MAX_WINDOWS 7
+#define SPACES 7
+#define CURSOR_SIZE 8
+static FATFS fatfs;
+#define version "0.0.5\n"
+fs_t fs;
+static pci_bus_t g_pci_bus;
+static uint32_t cursor_bg[CURSOR_SIZE * CURSOR_SIZE];
+int desktopmode = 0;
+int testmode = 0;
+int win_pressed = 0;
+int alt_pressed = 0;
+
+//Multitasking
+#include "multitasking/task.h"
+#include "multitasking/pit.h"
+
+//PCI
+static void print_hex(u32 val, int digits)
+{
+    char buf[9];
+    buf[digits] = '\0';
+    for (int i = digits - 1; i >= 0; i--) {
+        int nibble = val & 0xF;
+        buf[i] = nibble < 10 ? '0' + nibble : 'a' + nibble - 10;
+        val >>= 4;
+    }
+    vga_print(buf);
+}
+
+static void print_dec(size_t val)
+{
+    char buf[20];
+    int  i = 18;
+    buf[19] = '\0';
+    if (val == 0) { vga_print("0"); return; }
+    while (val && i >= 0) {
+        buf[i--] = '0' + (val % 10);
+        val /= 10;
+    }
+    vga_print(&buf[i + 1]);
+}
+
+void pci_list_devices(pci_bus_t *bus)
+{
+    vga_print("Found ");
+    print_dec(bus->count);
+    vga_print(" PCI device(s):\n\n");
+    for (size_t i = 0; i < bus->count; i++) {
+        pci_device_t *d = &bus->devices[i];
+        vga_print("[");
+        print_hex(d->bus,      2);
+        vga_print(":");
+        print_hex(d->device,   2);
+        vga_print(".");
+        print_hex(d->function, 1);
+        vga_print("] ");
+        vga_print("Vendor=");
+        print_hex(d->vendor_id, 4);
+        vga_print(" Device=");
+        print_hex(d->device_id, 4);
+        vga_print(" Class=");
+        print_hex(d->class_code, 2);
+        vga_print(":");
+        print_hex(d->subclass,   2);
+        vga_print(" IRQ=");
+        print_dec(d->irq_line);
+        vga_print("\n");
+        for (int b = 0; b < PCI_MAX_BARS; b++) {
+            if (d->bars[b].type == PCI_BAR_NONE) continue;
+
+            vga_print("  BAR");
+            print_dec(b);
+            vga_print(" [");
+            if      (d->bars[b].type == PCI_BAR_IO)    vga_print("I/O  ");
+            else if (d->bars[b].type == PCI_BAR_MEM32) vga_print("MEM32");
+            else                                        vga_print("MEM64");
+            vga_print("] base=0x");
+            print_hex((u32)(d->bars[b].base >> 32), 8);
+            print_hex((u32)(d->bars[b].base),       8);
+            vga_print(" size=0x");
+            print_hex((u32)d->bars[b].size, 8);
+            vga_print("\n");
+        }
+    }
+}
+//END PCI
+
+//----Test Crash----
+void test_crash_div0() {
+    int a = 1;
+    int b = 0;
+    int c = a / b;
+    (void)c;
+}
+
+void echo(char* command, char* toecho, int length) {
+    int i = 5;
+    int j = 0;
+    int quote_count = 0;
+
+    while (command[i] && j < 127) {
+        if (command[i] == '"') {
+            quote_count++;
+            i++;
+            if (quote_count == 2) break;
+            continue;
+        }
+        toecho[j++] = command[i++];
+    }
+    length = j;
+    toecho[j] = 0;
+}
+
+//Calc
+int calc(char input[128]) {
+    int result = 0;
+    int num = 0;
+    char op = '+';
+
+    for (int i = 0; input[i] != '\0'; i++) {
+        char c = input[i];
+        if (c >= '0' && c <= '9') {
+            num = num * 10 + (c - '0');
+        } else if (c == '+' || c == '-' || c == '*' || c == '/') {
+            if (op == '+') result += num;
+            else if (op == '-') result -= num;
+            else if (op == '*') result *= num;
+            else if (op == '/') result /= num;
+
+            op = c;
+            num = 0;
+        }
+    }
+
+    if (op == '+') result += num;
+    else if (op == '-') result -= num;
+    else if (op == '*') result *= num;
+    else if (op == '/') result /= num;
+
+    return result;
+}
+
+void task1() {
+    while (1) {
+        vga_print("A");
+    }
+}
+
+void task2() {
+    while (1) {
+        vga_print("B");
+    }
+}
+
+//ASCII tools
+void ascii(char tool[128]) {
+
+}
+
+void check_command(char* command) {
+    if (strcmp(command, "help") == 0) {
+        vga_print("Commands:\n help\n clear\n color\n version\n ls\n cat\n write\n rm\n snake\n time\n date\n triangle\n triangle red\n triangle green\n triangle blue\n pci\n pci enumerate\n pong\n ontime\n");
+    }
+    else if (strcmp(command, "pong") == 0) {
+        pong();
+    }
+    else if (strcmp(command, "clear") == 0) {
+        vga_clear();
+    }
+    else if (strcmp(command, "testcrash") == 0) {
+        test_crash_div0();
+    }
+    else if (startswith(command, "echo")) {
+        char* toecho = command + 4;
+        if (*toecho == '\0') {
+            vga_print("\n");
+        } else {
+            if (*toecho == ' ') toecho++;
+            vga_print(toecho);
+            vga_putc('\n');
+        }
+    }
+    else if (strcmp(command, "color") == 0) {
+        colortest(delay_ms);
+    }
+    else if (strcmp(command, "snake") == 0) {
+        snake();
+    }
+    else if (strcmp(command, "reboot") == 0) {
+        reboot();
+    }
+    else if (startswith(command, "triangle")) {
+        vga_clear();
+        if (use_framebuffer == 1) {
+            int x0 = 400, y0 = 25;
+            int x1 = 350,  y1 = 100;
+            int x2 = 450, y2 = 100;
+            char *color_str = command + 9;
+            uint32_t color = 0xFF0000;
+            if (strcmp(color_str, "red") == 0)        color = RED;
+            else if (strcmp(color_str, "green") == 0) color = GREEN;
+            else if (strcmp(color_str, "blue") == 0)  color = BLUE;
+            else                                       color = 0xFFFFFF;
+            fb_draw_triangle_outline_thick(x0, y0, x1, y1, x2, y2, color, 5);
+        } else {
+            vga_print("You don't use Modern Framebuffer!\n");
+        }
+    }
+    else if (strcmp(command, "pci") == 0) {
+        pci_list_devices(&g_pci_bus);
+    }
+    else if (strcmp(command, "pci enumerate") == 0) {
+        pci_enumerate(&g_pci_bus);
+    }
+    else if (strcmp(command, "time") == 0) {
+        int h, m, s;
+        char hs[3], ms[3], ss[3];
+        rtc_get_time(&h, &m, &s);
+        itoa2(h, hs); itoa2(m, ms); itoa2(s, ss);
+        vga_print(hs); vga_print(":"); vga_print(ms); vga_print(":"); vga_print(ss); vga_print("\n");
+        delay_ms(100);
+    }
+    else if (strcmp(command, "date") == 0) {
+        int day, month, year;
+        char days[4], months[4], years[6];
+        rtc_get_date(&day, &month, &year);
+        itoa2(day, days); itoa2(month, months); itoa2(year, years);
+        vga_print(days); vga_print("."); vga_print(months); vga_print("."); vga_print(years); vga_print("\n");
+    }
+    else if (strcmp(command, "version") == 0) {
+        vga_print(version);
+    }
+    else if (startswith(command, "ls")) {
+        fs_list(vga_print);
+    }
+    else if (startswith(command, "cat ")) {
+        char* path = command + 4;
+        static uint8_t cat_buf[4096];
+        int n = fs_read(path, cat_buf, sizeof(cat_buf) - 1);
+        if (n >= 0) {
+            cat_buf[n] = 0;
+            vga_print((char*)cat_buf);
+            vga_putc('\n');
+        } else {
+            vga_print("File not found!\n");
+        }
+    }
+    else if (startswith(command, "write ")) {
+        char* rest = command + 6;
+        char* space = rest;
+        while (*space && *space != ' ') space++;
+        if (*space == 0) {
+            vga_print("Usage: write <path> <content>\n");
+            return;
+        }
+        *space = 0;
+        char* path = rest;
+        char* content = space + 1;
+        if (fs_write(path, (uint8_t*)content, kstrlen(content)) == 0)
+            vga_print("File written!\n");
+        else
+            vga_print("Write failed!\n");
+    }
+    else if (startswith(command, "0") || startswith(command, "1") || startswith(command, "2") || startswith(command, "3") || startswith(command, "4") || startswith(command, "5") || startswith(command, "6") || startswith(command, "7") || startswith(command, "8") || startswith(command, "9")) {
+        vga_print("Result: ");
+        char result[128];
+        itoa(calc(command), result);
+        vga_print(result);
+        vga_print("\n");
+    }
+    else if (strcmp(command, "ontime") == 0) {
+        int timesince = ms_since_startup();
+        int timesinces = timesince / 1000;
+        char timesincesStr[500];
+        itoa(timesinces, timesincesStr);
+        vga_print(timesincesStr);
+        vga_print("s since startup\n");
+    }
+    else if (strcmp(command, "multitaskingtest") == 0) {
+        create_task(task1, 0);
+        create_task(task2, 1);
+        start_tasks();
+    }
+    else if (startswith(command, "rm ")) {
+        char* path = command + 3;
+        if (fs_delete(path) == 0)
+            vga_print("File deleted!\n");
+        else {
+            vga_print("File not found!\n");
+            vga_print(path); vga_print("\n");
+        }
+    }
+    else if (strcmp(command, "") != 0) {
+        vga_print("Command not found!\n");
+        vga_print("Trying to run User Space Program\n");
+        run_program(command);
+    }
+}
+
+//mouse
+void mouse_update() {
+    if (use_framebuffer) {
+        ps2mouse_poll();
+        update_mouse();
+    }
+}
+
+//----------Shell----------
+void shell(char* user) {
+    //static pci_bus_t bus = {0};
+    vga_print("A\n");
+    //cli();
+    pci_enumerate(&g_pci_bus);
+    //sti();
+    vga_print("B\n");
+    vga_clear();
+    pci_list_devices(&g_pci_bus);
+    vga_print("C\n");
+    vga_print("Welcome to TinyOS!\n");
+    char command[128];
+    int cmd_index = 0;
+    int shift_pressed = 0;
+    char c;
+    int clickedbutton;
+    //makebutton(50, 50, 50, 50);
+    while(1) {
+        vga_print(user);
+        vga_print("> ");
+        while(1) {
+            //drawbuttons();
+            //checkbuttonsclicked(&clickedbutton);
+            update_cursor(cursor_x, cursor_y);
+            uint16_t scancode = keyboard_read_scancode();
+            if (scancode == 0x2A || scancode == 0x36) {
+                shift_pressed = 1;
+            } else if (scancode == 0xAA || scancode == 0xB6) { 
+                shift_pressed = 0;
+            }    
+            if (shift_pressed == 0) {
+                c = scancode_to_ascii[scancode];
+            } else {
+                c = scancode_upper[scancode];
+            }
+            if (c) {
+                if (c == '\n') {
+                    vga_putc(c);
+                    command[cmd_index] = 0;
+                    cmd_index = 0;
+                    check_command(command);
+                    for (int i = 0; i < 128; i++)
+                        command[i] = 0;
+                    break;
+                } else if (c == '\b') {
+                    vga_backspace(command, &cmd_index);
+                } else {
+                    vga_putc(c);
+                    if (cmd_index < 127) {
+                        command[cmd_index++] = c;
+                    }
+                }
+            }
+            mouse_update();
+        }
+    }
+}
+
+//----------Kernel Main----------
+char tinyos_logo[] =
+"1111100000000000111101111\n"
+"0010001000000000100101000\n"
+"0010000011101010100101111\n"
+"0010001010101110100100001\n"
+"0010001010100010111101111\n";
+
+void kernel_main(uint32_t magic, uint32_t mb_addr) {
+    multiboot_info_t *mb = (multiboot_info_t *)mb_addr;
+    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
+    vga[0] = 0x0F00 | 'A';
+    vga[1] = 0x0F00 | 'B';
+    vga[2] = 0x0F00 | 'C';
+    //Inits
+    vga_init(mb);
+    vga_print("Screen Good!");
+    vga_clear();
+    gdt_init();
+    idt_init();
+    timer_init();
+    task_init();
+    pit_init(100);
+    if (use_framebuffer) {
+        vga_print("mouse init\n");
+        ps2mouse_init();
+        mouse.x = fb_width / 2;
+        mouse.y = fb_height / 2;
+        last_x = mouse.x;
+        last_y = mouse.y;
+        vga_print("mouse init done\n");
+    }
+
+    uint32_t fat_lba = ata_find_fat_partition();
+    if (fat_lba == 0) vga_print("No FAT partition found!\n");
+    else vga_print("FAT partition found!\n");
+
+    FRESULT mr = f_mount(&fatfs, "0:", 0);
+    if (mr == FR_OK) vga_print("FAT mount OK\n");
+    else vga_print("FAT mount FAILED\n");
+
+    update_cursor(0, 0);
+    logo(tinyos_logo);
+    vga_print("Loading Users\n");
+    load_users();
+    vga_print("Loading Users Done\n");
+
+    if (testmode == 0) {
+        char* loginstatus = login();
+        if (strcmp(loginstatus, "0") != 0) {
+            shell(loginstatus);
+        } else {
+            vga_print("too many times wrong. Rebooting...");
+            delay_ms(500);
+            reboot();
+        }
+    } else {
+        shell("test");
+    }
+
+    vga_print("Seems like the shell stopped...");
+    __asm__ volatile("hlt");
+}
+
+---grub.cfg.old---
+set timeout=0
+set default=0
+
+set gfxpayload=text
+
+menuentry "TinyOS C" {
+    multiboot /boot/kernel.elf
+    boot
+}
+
+
+---timer.h---
+#ifndef TIMER_H
+#define TIMER_H
+
+#include "keyboard.h"
+#include <stdint.h>
+
+static inline uint64_t rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+uint64_t ms_since_startup(void);
+void timer_init(void);
+void delay_ms(uint32_t ms);
+
+#endif
+
+---gdt.c---
+#include "gdt.h"
+
+static struct gdt_entry gdt[3];
+static struct gdt_ptr   gdtp;
+
+static void gdt_set_gate(int n, uint32_t base, uint32_t limit,
+                         uint8_t access, uint8_t gran) {
+    gdt[n].base_low   = base & 0xFFFF;
+    gdt[n].base_mid   = (base >> 16) & 0xFF;
+    gdt[n].base_high  = (base >> 24) & 0xFF;
+    gdt[n].limit_low  = limit & 0xFFFF;
+    gdt[n].granularity = ((limit >> 16) & 0x0F) | (gran & 0xF0);
+    gdt[n].access     = access;
+}
+
+void gdt_init() {
+    gdtp.limit = sizeof(gdt) - 1;
+    gdtp.base  = (uint32_t)&gdt;
+
+    gdt_set_gate(0, 0, 0,          0x00, 0x00);
+    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
+    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
+
+    __asm__ volatile(
+        "lgdt %0\n\t"
+        "mov $0x10, %%ax\n\t"
+        "mov %%ax, %%ds\n\t"
+        "mov %%ax, %%es\n\t"
+        "mov %%ax, %%fs\n\t"
+        "mov %%ax, %%gs\n\t"
+        "mov %%ax, %%ss\n\t"
+        "ljmp $0x08, $1f\n\t"
+        "1:\n\t"
+        : : "m"(gdtp) : "eax"
+    );
+}
+
+---font_data.h---
+#ifndef FONT_DATA_H
+#define FONT_DATA_H
+
+#include <stdint.h>
+
+extern unsigned char font_bin[];
+extern unsigned int  font_bin_len;
+
+#endif
+
+---buildgithub.sh---
+#!/bin/bash
+VERSION=$(cat version.txt)
+echo "Adding Files"
+git add .
+echo "Making Commit"
+git commit -m "Update: $VERSION" || echo "Nothing to commit"
+echo "Pushing"
+git push origin main --force
+gh release create "$VERSION" \
+  TinyOS.iso \
+  --title "TinyOS v$VERSION" \
+  --notes "Release $VERSION: Just the ISO"
+
+
+---gdt.h---
+#ifndef GDT_H
+#define GDT_H
+#include <stdint.h>
+
+struct gdt_entry {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_mid;
+    uint8_t  access;
+    uint8_t  granularity;
+    uint8_t  base_high;
+} __attribute__((packed));
+
+struct gdt_ptr {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed));
+
+void gdt_init();
+
+#endif
+
+---vga.c---
+#include "vga.h"
+#include "mouse.h"
+
+// ── Global definitions — exactly one copy ───────────────────────────────────
+volatile uint16_t *vga_buffer = (volatile uint16_t *)0xB8000;
+uint8_t  color           = 0x0F;
+int      cursor_x        = 0;
+int      cursor_y        = 0;
+int      use_framebuffer = 0;
+uint8_t *fb_addr         = 0;
+uint32_t fb_pitch        = 0;
+uint32_t fb_width        = 0;
+uint32_t fb_height       = 0;
+uint8_t  fb_bpp          = 0;
+
+// ── VGA color → 32-bit RGB ───────────────────────────────────────────────────
+static const uint32_t vga_to_rgb[16] = {
+    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
+    0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
+    0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+};
+
+#define FB_CHAR_W  8
+#define FB_CHAR_H  16
+#define FB_COLS    (fb_width  / FB_CHAR_W)
+#define FB_ROWS    (fb_height / FB_CHAR_H)
+
+// ── Internal helpers ─────────────────────────────────────────────────────────
+static inline void vga_outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+void fb_putpixel(uint32_t x, uint32_t y, uint32_t c) {
+    uint32_t *pixel = (uint32_t *)(fb_addr + y * fb_pitch + x * 4);
+    *pixel = vga_to_rgb_func(c);
+}
+
+static void fb_draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int sx = (dx >= 0) ? 1 : -1;
+    int sy = (dy >= 0) ? 1 : -1;
+    dx = dx >= 0 ? dx : -dx;
+    dy = dy >= 0 ? dy : -dy;
+    int err = dx + ( -dy );
+
+    while (1) {
+        fb_putpixel(x0, y0, color);
+        if (x0 == x1 && y0 == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 >= -dy) { err += -dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static void fb_draw_line_thick(int x0, int y0, int x1, int y1, uint32_t color, int thickness) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int sx = dx >= 0 ? 1 : -1;
+    int sy = dy >= 0 ? 1 : -1;
+
+    dx = dx >= 0 ? dx : -dx;
+    dy = dy >= 0 ? dy : -dy;
+
+    int err = dx + (-dy);
+
+    while (1) {
+        for (int tx = -thickness/2; tx <= thickness/2; tx++) {
+            for (int ty = -thickness/2; ty <= thickness/2; ty++) {
+                uint32_t px = x0 + tx;
+                uint32_t py = y0 + ty;
+                if (px < fb_width && py < fb_height)
+                    fb_putpixel(px, py, color);
+            }
+        }
+
+        if (x0 == x1 && y0 == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 >= -dy) { err += -dy; x0 += sx; }
+        if (e2 <= dx)  { err += dx;  y0 += sy; }
+    }
+}
+
+void fb_draw_triangle_outline_thick(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t color,int thickness){
+    fb_draw_line_thick(x0,y0,x1,y1,color,thickness);
+    fb_draw_line_thick(x1,y1,x2,y2,color,thickness);
+    fb_draw_line_thick(x2,y2,x0,y0,color,thickness);
+}
+
+void fb_draw_triangle_outline(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color) {
+    fb_draw_line(x0, y0, x1, y1, color);
+    fb_draw_line(x1, y1, x2, y2, color);
+    fb_draw_line(x2, y2, x0, y0, color);
+}
+
+void fb_drawchar(int cx, int cy, char c, uint8_t fg, uint8_t bg) {
+    uint32_t fgc = vga_to_rgb[fg & 0xF];
+    uint32_t bgc = vga_to_rgb[bg & 0xF];
+    int px = cx * FB_CHAR_W;
+    int py = cy * FB_CHAR_H;
+    for (int row = 0; row < FB_CHAR_H; row++) {
+        uint8_t glyph = font_bin[(uint8_t)c * 16 + row];
+        for (int col = 0; col < FB_CHAR_W; col++) {
+            if (glyph & (0x80 >> col))
+                fb_putpixel(px + col, py + row, fgc);
+            else
+                fb_putpixel(px + col, py + row, bgc);
+        }
+    }
+}
+
+static void fb_scroll(void) {
+    uint32_t row_bytes = FB_CHAR_H * fb_pitch;
+    uint8_t *dst = fb_addr;
+    uint8_t *src = fb_addr + row_bytes;
+    uint32_t copy_size = (FB_ROWS - 1) * row_bytes;
+    for (uint32_t i = 0; i < copy_size; i++)
+        dst[i] = src[i];
+    uint8_t *last = fb_addr + (FB_ROWS - 1) * row_bytes;
+    uint32_t bgc = vga_to_rgb[0];
+    for (uint32_t y = 0; y < FB_CHAR_H; y++) {
+        uint32_t *row = (uint32_t *)(last + y * fb_pitch);
+        for (uint32_t x = 0; x < fb_width; x++)
+            row[x] = bgc;
+    }
+    cursor_y = (int)(FB_ROWS - 1);
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+void vga_init(multiboot_info_t *mb) {
+    if (mb && (mb->flags & (1 << 12)) && mb->fb_addr && mb->fb_bpp == 32) {
+        use_framebuffer = 1;
+        vga_print("Framebuffer ON\n");
+        fb_addr   = (uint8_t *)(uint32_t)mb->fb_addr;
+        fb_pitch  = mb->fb_pitch;
+        fb_width  = mb->fb_width;
+        fb_height = mb->fb_height;
+        fb_bpp    = mb->fb_bpp;
+    } else {
+        vga_print("Framebuffer OFF\n");
+    }
+}
+
+void update_cursor(int x, int y) {
+    if (!use_framebuffer) {
+        uint16_t pos = (uint16_t)(y * VGA_WIDTH + x);
+        vga_outb(0x3D4, 0x0F); vga_outb(0x3D5, pos & 0xFF);
+        vga_outb(0x3D4, 0x0E); vga_outb(0x3D5, (pos >> 8) & 0xFF);
+    }
+}
+
+void put_block(int x, int y, uint8_t fg, uint8_t bg) {
+    if (use_framebuffer) {
+        fb_drawchar(x, y, (char)0xDB, fg, bg);
+    } else {
+        uint16_t col = (bg << 4) | fg;
+        vga_buffer[y * VGA_WIDTH + x] = ((uint16_t)col << 8) | FULL_BLOCK;
+    }
+}
+
+int vga_used_lines(void) {
+    if (use_framebuffer) return cursor_y;
+    for (int y = VGA_HEIGHT - 1; y >= 0; y--)
+        for (int x = 0; x < VGA_WIDTH; x++)
+            if ((vga_buffer[y * VGA_WIDTH + x] & 0xFF) != ' ')
+                return y + 1;
+    return 0;
+}
+
+void vga_scroll(void)
+{
+    if (use_framebuffer)
+    {
+        if (!first_mouse_frame)
+            restore_cursor_bg(last_x, last_y);
+        fb_scroll();
+        first_mouse_frame = 1;
+        return;
+    }
+    for (int y = 0; y < VGA_HEIGHT - 1; y++)
+        for (int x = 0; x < VGA_WIDTH; x++)
+            vga_buffer[y * VGA_WIDTH + x] =
+                vga_buffer[(y + 1) * VGA_WIDTH + x];
+
+    for (int x = 0; x < VGA_WIDTH; x++)
+        vga_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + x] =
+            ((uint16_t)color << 8) | ' ';
+
+    cursor_y = VGA_HEIGHT - 1;
+}
+
+void vga_putc(char c) {
+    int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
+    int rows = use_framebuffer ? (int)FB_ROWS : VGA_HEIGHT;
+    if (c == '\n') {
+        cursor_x = 0;
+        cursor_y++;
+    } else {
+        if (use_framebuffer)
+            fb_drawchar(cursor_x, cursor_y, c, color & 0xF, (color >> 4) & 0xF);
+        else
+            vga_buffer[cursor_y * VGA_WIDTH + cursor_x] = ((uint16_t)color << 8) | (uint8_t)c;
+        cursor_x++;
+        if (cursor_x >= cols) { cursor_x = 0; cursor_y++; }
+    }
+    while (cursor_y >= rows) vga_scroll();
+}
+
+void vga_print(const char *str) {
+    while (*str) vga_putc(*str++);
+}
+
+void vga_clear(void) {
+    cursor_x = 0;
+    cursor_y = 0;
+    if (use_framebuffer) {
+        uint32_t bgc = vga_to_rgb[0];
+        for (uint32_t y = 0; y < fb_height; y++) {
+            uint32_t *row = (uint32_t *)(fb_addr + y * fb_pitch);
+            for (uint32_t x = 0; x < fb_width; x++)
+                row[x] = bgc;
+        }
+    } else {
+        uint16_t blank = ((uint16_t)color << 8) | ' ';
+        for (int y = 0; y < VGA_HEIGHT; y++)
+            for (int x = 0; x < VGA_WIDTH; x++)
+                vga_buffer[y * VGA_WIDTH + x] = blank;
+    }
+}
+
+void vga_backspace(char *command, int *cmd_index) {
+    if (*cmd_index > 0) {
+        int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
+        if (cursor_x > 2) cursor_x--;
+        else if (cursor_y > 0) { cursor_y--; cursor_x = cols - 1; }
+        (*cmd_index)--;
+        command[*cmd_index] = 0;
+        if (use_framebuffer)
+            fb_drawchar(cursor_x, cursor_y, ' ', color & 0xF, (color >> 4) & 0xF);
+        else
+            vga_buffer[cursor_y * VGA_WIDTH + cursor_x] = ((uint16_t)color << 8) | ' ';
+    } else {
+        beep(440, 100);
+    }
+}
+
+void colortest(void (*delay_fn)(uint32_t)) {
+    uint8_t colors[] = { RED, GREEN, BLUE };
+    for (int c = 0; c < 3; c++) {
+        vga_clear();
+        int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
+        int rows = use_framebuffer ? (int)FB_ROWS : VGA_HEIGHT;
+        for (int x = 0; x < cols; x++)
+            for (int y = 0; y < rows; y++)
+                put_block(x, y, colors[c], colors[c]);
+        delay_fn(1000);
+    }
+    vga_clear();
+}
+
+void logo(char *lg) {
+    vga_clear();
+    int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
+    int rows = use_framebuffer ? (int)FB_ROWS : VGA_HEIGHT;
+    int logo_width  = 25;
+    int logo_height = 5;
+    int start_x = (cols - logo_width) / 2;
+    int start_y = (rows - logo_height) / 2;
+    cursor_x = start_x;
+    cursor_y = start_y;
+    for (char *p = lg; *p; p++) {
+        if (*p == '1')       vga_putc((char)219);
+        else if (*p == '0')  vga_putc(' ');
+        else if (*p == '\n') { cursor_x = start_x; cursor_y++; }
+    }
+    delay_ms(1000);
+    vga_clear();
+}
+
+void logo_crash(char *lg) {
+    uint8_t saved_color = color;
+    color = 0x0E;
+    int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
+    int rows = use_framebuffer ? (int)FB_ROWS : VGA_HEIGHT;
+    int logo_width  = 15;
+    int logo_height = 8;
+    int start_x = (cols - logo_width) / 2;
+    int start_y = (rows - logo_height) / 2;
+    cursor_x = start_x;
+    cursor_y = start_y;
+    for (char *p = lg; *p; p++) {
+        if (*p == '1')       vga_putc((char)219);
+        else if (*p == '0')  vga_putc(' ');
+        else if (*p == '\n') { cursor_x = start_x; cursor_y++; }
+    }
+    color = saved_color;
+}
+
+---linker.ld---
+ENTRY(_start)
+
+SECTIONS
+{
+    . = 0x100000;
+
+    .multiboot : { *(.multiboot) }
+
+    . = ALIGN(4);
+    .text : { *(.text*) }
+
+    . = ALIGN(4);
+    .rodata : { *(.rodata*) }
+
+    . = ALIGN(4);
+    .eh_frame : { *(.eh_frame) }
+
+    . = ALIGN(4);
+    .data : { *(.data*) }
+
+    . = ALIGN(16);
+    .bootstrap_stack (NOLOAD) : {
+        *(.bootstrap_stack)
+    }
+
+    . = ALIGN(4);
+    .bss (NOLOAD) :
+    {
+        _bss_start = .;
+        *(.bss*)
+        *(COMMON)
+        _bss_end = .;
+    }
+
+    _end = .;
+}
+
+---keyboard.c---
+#include "keyboard.h"
+
+char scancode_to_ascii[256] = {
+    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
+    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',0,
+    'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\','z',
+    'x','c','v','b','n','m',',','.','/',0,'*',0,' ','\0'
+};
+
+char scancode_upper[256] = {
+    0, 27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+    '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',0,
+    'A','S','D','F','G','H','J','K','L',':','"','~',0,'|','Z',
+    'X','C','V','B','N','M','<','>','?',0,'*',0,' ','\0'
+};
+
+void itoa(int num, char *str) {
+    int i = 0, is_negative = 0;
+    if (num == 0) { str[i++] = '0'; str[i] = 0; return; }
+    if (num < 0)  { is_negative = 1; num = -num; }
+    while (num != 0) { str[i++] = (num % 10) + '0'; num /= 10; }
+    if (is_negative) str[i++] = '-';
+    str[i] = 0;
+    int start = 0, end = i - 1;
+    while (start < end) {
+        char tmp = str[start]; str[start] = str[end]; str[end] = tmp;
+        start++; end--;
+    }
+}
+
+int atoi(const char *str) {
+    int result = 0;
+    int sign = 1;
+    int i = 0;
+    if (str[0] == '-') {
+        sign = -1;
+        i = 1;
+    }
+
+    for (; str[i] != '\0'; i++) {
+        char c = str[i];
+        if (c >= '0' && c <= '9') {
+            result = result * 10 + (c - '0');
+        } else {
+            break;
+        }
+    }
+
+    return result * sign;
+}
+
+void itoa2(int num, char *str) {
+    if (num < 10) { str[0] = '0'; str[1] = '0' + num; str[2] = 0; }
+    else itoa(num, str);
+}
+
+uint8_t extended = 0;
+
+uint16_t keyboard_read_scancode() {
+    uint8_t status = inb(0x64);
+    if (!(status & 1)) return 0;
+    if (status & (1 << 5)) return 0;
+    uint8_t sc = inb(0x60);
+    if (sc == 0xE0) {
+        extended = 1;
+        return 0;
+    }
+    if (extended) {
+        extended = 0;
+        return 0xE000 | sc;
+    }
+    return sc;
+}
+
+---pong.h---
+#ifndef PONG_H
+#define PONG_H
+void pong();
+#endif
+
+---snake.h---
+#ifndef SNAKE_H
+#define SNAKE_H
+void snake();
+uint16_t rand16();
+#endif
+
+---mouse.h---
+#ifndef MOUSE_H
+#define MOUSE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+extern uint32_t fb_width;
+extern uint32_t fb_height;
+extern uint8_t *fb_addr;
+#define CURSOR_SIZE 8
+extern uint32_t fb_pitch;
+static const uint8_t cursor_bitmap[CURSOR_SIZE];
+extern int last_x;
+extern int last_y;
+extern int first_mouse_frame;
+extern uint8_t bat;
+extern uint8_t ack;
+extern uint8_t id;
+extern uint8_t mouse_cycle;
+
+typedef struct {
+    int x;
+    int y;
+    uint8_t left;
+    uint8_t right;
+    uint8_t middle;
+} ps2mouse_state_t;
+
+extern ps2mouse_state_t mouse;
+
+void ps2mouse_init(void);
+void ps2mouse_poll(void);
+void restore_cursor_bg(int x, int y);
+void update_mouse(void);
+
+#endif
+
+---idt.h---
+#ifndef IDT_H
+#define IDT_H
+#include <stdint.h>
+#include "vga.h"
+
+struct idt_entry {
+    uint16_t base_low;
+    uint16_t sel;
+    uint8_t  always0;
+    uint8_t  flags;
+    uint16_t base_high;
+} __attribute__((packed));
+
+struct idt_ptr {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed));
+
+struct interrupt_frame {
+    uint32_t ip;
+    uint32_t cs;
+    uint32_t flags;
+    uint32_t sp;
+    uint32_t ss;
+};
+
+extern struct idt_entry idt[256];
+extern struct idt_ptr   idtp;
+extern char crash_logo[];
+
+void generic_crash_handler(struct interrupt_frame* frame);
+void idt_init();
+
+static inline void idt_set_gate(int n, uint32_t handler, uint16_t sel, uint8_t flags) {
+    idt[n].base_low  = handler & 0xFFFF;
+    idt[n].base_high = (handler >> 16) & 0xFFFF;
+    idt[n].sel       = sel;
+    idt[n].always0   = 0;
+    idt[n].flags     = flags;
+}
+
+static inline void idt_load() {
+    idtp.limit = sizeof(idt) - 1;
+    idtp.base  = (uint32_t)&idt;
+    __asm__ volatile("lidt %0" : : "m"(idtp));
+}
+
+#endif
+
+---content.txt---
+
+
+---font_data.c---
+unsigned char font_bin[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0x81, 0xa5, 0x81, 0x81, 0xbd,
+  0x99, 0x81, 0x81, 0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0xff,
+  0xdb, 0xff, 0xff, 0xc3, 0xe7, 0xff, 0xff, 0x7e, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x6c, 0xfe, 0xfe, 0xfe, 0xfe, 0x7c, 0x38, 0x10,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x7c, 0xfe,
+  0x7c, 0x38, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18,
+  0x3c, 0x3c, 0xe7, 0xe7, 0xe7, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x18, 0x3c, 0x7e, 0xff, 0xff, 0x7e, 0x18, 0x18, 0x3c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x3c,
+  0x3c, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xe7, 0xc3, 0xc3, 0xe7, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x66, 0x42, 0x42, 0x66, 0x3c, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc3, 0x99, 0xbd,
+  0xbd, 0x99, 0xc3, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x1e, 0x0e,
+  0x1a, 0x32, 0x78, 0xcc, 0xcc, 0xcc, 0xcc, 0x78, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x3c, 0x66, 0x66, 0x66, 0x66, 0x3c, 0x18, 0x7e, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x33, 0x3f, 0x30, 0x30, 0x30,
+  0x30, 0x70, 0xf0, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0x63,
+  0x7f, 0x63, 0x63, 0x63, 0x63, 0x67, 0xe7, 0xe6, 0xc0, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x18, 0x18, 0xdb, 0x3c, 0xe7, 0x3c, 0xdb, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfe, 0xf8,
+  0xf0, 0xe0, 0xc0, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x06, 0x0e,
+  0x1e, 0x3e, 0xfe, 0x3e, 0x1e, 0x0e, 0x06, 0x02, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x18, 0x3c, 0x7e, 0x18, 0x18, 0x18, 0x7e, 0x3c, 0x18, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+  0x66, 0x00, 0x66, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xdb,
+  0xdb, 0xdb, 0x7b, 0x1b, 0x1b, 0x1b, 0x1b, 0x1b, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x7c, 0xc6, 0x60, 0x38, 0x6c, 0xc6, 0xc6, 0x6c, 0x38, 0x0c, 0xc6,
+  0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0xfe, 0xfe, 0xfe, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x3c,
+  0x7e, 0x18, 0x18, 0x18, 0x7e, 0x3c, 0x18, 0x7e, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x18, 0x3c, 0x7e, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x7e, 0x3c, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x18, 0x0c, 0xfe, 0x0c, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x60, 0xfe, 0x60, 0x30, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0xc0,
+  0xc0, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x28, 0x6c, 0xfe, 0x6c, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x38, 0x7c, 0x7c, 0xfe, 0xfe, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xfe, 0x7c, 0x7c,
+  0x38, 0x38, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x18, 0x3c, 0x3c, 0x3c, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66, 0x66, 0x24, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6c,
+  0x6c, 0xfe, 0x6c, 0x6c, 0x6c, 0xfe, 0x6c, 0x6c, 0x00, 0x00, 0x00, 0x00,
+  0x18, 0x18, 0x7c, 0xc6, 0xc2, 0xc0, 0x7c, 0x06, 0x06, 0x86, 0xc6, 0x7c,
+  0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc2, 0xc6, 0x0c, 0x18,
+  0x30, 0x60, 0xc6, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x38, 0x6c,
+  0x6c, 0x38, 0x76, 0xdc, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x30, 0x30, 0x30, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x18, 0x30, 0x30, 0x30, 0x30,
+  0x30, 0x30, 0x18, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x18,
+  0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x3c, 0xff, 0x3c, 0x66, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x7e,
+  0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x02, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0x80, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x38, 0x6c, 0xc6, 0xc6, 0xd6, 0xd6, 0xc6, 0xc6, 0x6c, 0x38,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x38, 0x78, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6,
+  0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0xc6, 0xfe, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x7c, 0xc6, 0x06, 0x06, 0x3c, 0x06, 0x06, 0x06, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x1c, 0x3c, 0x6c, 0xcc, 0xfe,
+  0x0c, 0x0c, 0x0c, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xc0,
+  0xc0, 0xc0, 0xfc, 0x06, 0x06, 0x06, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x38, 0x60, 0xc0, 0xc0, 0xfc, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xc6, 0x06, 0x06, 0x0c, 0x18,
+  0x30, 0x30, 0x30, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6,
+  0xc6, 0xc6, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x06, 0x06, 0x0c, 0x78,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00,
+  0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x06, 0x0c, 0x18, 0x30, 0x60, 0x30, 0x18, 0x0c, 0x06,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0x00, 0x00,
+  0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60,
+  0x30, 0x18, 0x0c, 0x06, 0x0c, 0x18, 0x30, 0x60, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x7c, 0xc6, 0xc6, 0x0c, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xde, 0xde,
+  0xde, 0xdc, 0xc0, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x38,
+  0x6c, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x66, 0x66, 0x66, 0x66, 0xfc,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x66, 0xc2, 0xc0, 0xc0, 0xc0,
+  0xc0, 0xc2, 0x66, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x6c,
+  0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x6c, 0xf8, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xfe, 0x66, 0x62, 0x68, 0x78, 0x68, 0x60, 0x62, 0x66, 0xfe,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x66, 0x62, 0x68, 0x78, 0x68,
+  0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x66,
+  0xc2, 0xc0, 0xc0, 0xde, 0xc6, 0xc6, 0x66, 0x3a, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1e, 0x0c,
+  0x0c, 0x0c, 0x0c, 0x0c, 0xcc, 0xcc, 0xcc, 0x78, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xe6, 0x66, 0x66, 0x6c, 0x78, 0x78, 0x6c, 0x66, 0x66, 0xe6,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x60, 0x60, 0x60, 0x60, 0x60,
+  0x60, 0x62, 0x66, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xee,
+  0xfe, 0xfe, 0xd6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xc6, 0xe6, 0xf6, 0xfe, 0xde, 0xce, 0xc6, 0xc6, 0xc6, 0xc6,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6,
+  0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x66,
+  0x66, 0x66, 0x7c, 0x60, 0x60, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xd6, 0xde, 0x7c,
+  0x0c, 0x0e, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x66, 0x66, 0x66, 0x7c, 0x6c,
+  0x66, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6,
+  0xc6, 0x60, 0x38, 0x0c, 0x06, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x7e, 0x7e, 0x5a, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6,
+  0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6,
+  0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x6c, 0x38, 0x10, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xd6, 0xd6, 0xd6, 0xfe, 0xee, 0x6c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0x6c, 0x7c, 0x38, 0x38,
+  0x7c, 0x6c, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66,
+  0x66, 0x66, 0x3c, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xfe, 0xc6, 0x86, 0x0c, 0x18, 0x30, 0x60, 0xc2, 0xc6, 0xfe,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x30, 0x30, 0x30, 0x30, 0x30,
+  0x30, 0x30, 0x30, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
+  0xc0, 0xe0, 0x70, 0x38, 0x1c, 0x0e, 0x06, 0x02, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x3c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x3c,
+  0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x6c, 0xc6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00,
+  0x30, 0x30, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x0c, 0x7c,
+  0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x60,
+  0x60, 0x78, 0x6c, 0x66, 0x66, 0x66, 0x66, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc0, 0xc0, 0xc0, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x0c, 0x0c, 0x3c, 0x6c, 0xcc,
+  0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x7c, 0xc6, 0xfe, 0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x38, 0x6c, 0x64, 0x60, 0xf0, 0x60, 0x60, 0x60, 0x60, 0xf0,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xcc, 0xcc,
+  0xcc, 0xcc, 0xcc, 0x7c, 0x0c, 0xcc, 0x78, 0x00, 0x00, 0x00, 0xe0, 0x60,
+  0x60, 0x6c, 0x76, 0x66, 0x66, 0x66, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x18, 0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x00, 0x0e, 0x06, 0x06,
+  0x06, 0x06, 0x06, 0x06, 0x66, 0x66, 0x3c, 0x00, 0x00, 0x00, 0xe0, 0x60,
+  0x60, 0x66, 0x6c, 0x78, 0x78, 0x6c, 0x66, 0xe6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xec, 0xfe, 0xd6,
+  0xd6, 0xd6, 0xd6, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xdc, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x66, 0x66,
+  0x66, 0x66, 0x66, 0x7c, 0x60, 0x60, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x76, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x7c, 0x0c, 0x0c, 0x1e, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x76, 0x66, 0x60, 0x60, 0x60, 0xf0,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c, 0xc6, 0x60,
+  0x38, 0x0c, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x30,
+  0x30, 0xfc, 0x30, 0x30, 0x30, 0x30, 0x36, 0x1c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x76,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66, 0x66,
+  0x66, 0x66, 0x3c, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xc6, 0xc6, 0xd6, 0xd6, 0xd6, 0xfe, 0x6c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x6c, 0x38, 0x38, 0x38, 0x6c, 0xc6,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0xc6, 0xc6,
+  0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x0c, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xfe, 0xcc, 0x18, 0x30, 0x60, 0xc6, 0xfe, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x0e, 0x18, 0x18, 0x18, 0x70, 0x18, 0x18, 0x18, 0x18, 0x0e,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0x18,
+  0x18, 0x18, 0x0e, 0x18, 0x18, 0x18, 0x18, 0x70, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x76, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x6c, 0xc6,
+  0xc6, 0xc6, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x66,
+  0xc2, 0xc0, 0xc0, 0xc0, 0xc2, 0x66, 0x3c, 0x0c, 0x06, 0x7c, 0x00, 0x00,
+  0x00, 0x00, 0xcc, 0x00, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x76,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x18, 0x30, 0x00, 0x7c, 0xc6, 0xfe,
+  0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x6c,
+  0x00, 0x78, 0x0c, 0x7c, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xcc, 0x00, 0x00, 0x78, 0x0c, 0x7c, 0xcc, 0xcc, 0xcc, 0x76,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x30, 0x18, 0x00, 0x78, 0x0c, 0x7c,
+  0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x38, 0x6c, 0x38,
+  0x00, 0x78, 0x0c, 0x7c, 0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x3c, 0x66, 0x60, 0x60, 0x66, 0x3c, 0x0c, 0x06,
+  0x3c, 0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x6c, 0x00, 0x7c, 0xc6, 0xfe,
+  0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x00,
+  0x00, 0x7c, 0xc6, 0xfe, 0xc0, 0xc0, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x60, 0x30, 0x18, 0x00, 0x7c, 0xc6, 0xfe, 0xc0, 0xc0, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x00, 0x00, 0x38, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x3c, 0x66,
+  0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x60, 0x30, 0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x00, 0x10, 0x38, 0x6c, 0xc6, 0xc6,
+  0xfe, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x38, 0x6c, 0x38, 0x00,
+  0x38, 0x6c, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
+  0x18, 0x30, 0x60, 0x00, 0xfe, 0x66, 0x60, 0x7c, 0x60, 0x60, 0x66, 0xfe,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xcc, 0x76, 0x36,
+  0x7e, 0xd8, 0xd8, 0x6e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3e, 0x6c,
+  0xcc, 0xcc, 0xfe, 0xcc, 0xcc, 0xcc, 0xcc, 0xce, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x10, 0x38, 0x6c, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x00, 0x00, 0x7c, 0xc6, 0xc6,
+  0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x30, 0x18,
+  0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x30, 0x78, 0xcc, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x76,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x30, 0x18, 0x00, 0xcc, 0xcc, 0xcc,
+  0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x00,
+  0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7e, 0x06, 0x0c, 0x78, 0x00,
+  0x00, 0xc6, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0xc6, 0x00, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6,
+  0xc6, 0xc6, 0xc6, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x3c,
+  0x66, 0x60, 0x60, 0x60, 0x66, 0x3c, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x38, 0x6c, 0x64, 0x60, 0xf0, 0x60, 0x60, 0x60, 0x60, 0xe6, 0xfc,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x66, 0x66, 0x3c, 0x18, 0x7e, 0x18,
+  0x7e, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0xcc, 0xcc,
+  0xf8, 0xc4, 0xcc, 0xde, 0xcc, 0xcc, 0xcc, 0xc6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x0e, 0x1b, 0x18, 0x18, 0x18, 0x7e, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0xd8, 0x70, 0x00, 0x00, 0x00, 0x18, 0x30, 0x60, 0x00, 0x78, 0x0c, 0x7c,
+  0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x18, 0x30,
+  0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x18, 0x30, 0x60, 0x00, 0x7c, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x30, 0x60, 0x00, 0xcc, 0xcc, 0xcc,
+  0xcc, 0xcc, 0xcc, 0x76, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xdc,
+  0x00, 0xdc, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x00, 0x00, 0x00,
+  0x76, 0xdc, 0x00, 0xc6, 0xe6, 0xf6, 0xfe, 0xde, 0xce, 0xc6, 0xc6, 0xc6,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x6c, 0x6c, 0x3e, 0x00, 0x7e, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x38, 0x6c, 0x6c,
+  0x38, 0x00, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x30, 0x30, 0x00, 0x30, 0x30, 0x60, 0xc0, 0xc6, 0xc6, 0x7c,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xc0,
+  0xc0, 0xc0, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0xfe, 0x06, 0x06, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xc0, 0xc0, 0xc2, 0xc6, 0xcc, 0x18, 0x30, 0x60, 0xdc, 0x86, 0x0c,
+  0x18, 0x3e, 0x00, 0x00, 0x00, 0xc0, 0xc0, 0xc2, 0xc6, 0xcc, 0x18, 0x30,
+  0x66, 0xce, 0x9e, 0x3e, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18,
+  0x00, 0x18, 0x18, 0x18, 0x3c, 0x3c, 0x3c, 0x18, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x6c, 0xd8, 0x6c, 0x36, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd8, 0x6c, 0x36,
+  0x6c, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x44, 0x11, 0x44,
+  0x11, 0x44, 0x11, 0x44, 0x11, 0x44, 0x11, 0x44, 0x11, 0x44, 0x11, 0x44,
+  0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa,
+  0x55, 0xaa, 0x55, 0xaa, 0xdd, 0x77, 0xdd, 0x77, 0xdd, 0x77, 0xdd, 0x77,
+  0xdd, 0x77, 0xdd, 0x77, 0xdd, 0x77, 0xdd, 0x77, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0xf8, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0xf8, 0x18, 0xf8,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0xf6, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x18, 0xf8,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0xf6, 0x06, 0xf6, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x06, 0xf6,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0xf6, 0x06, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0xfe, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0xf8, 0x18, 0xf8,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0xf8, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1f, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0xff,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0xff, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1f, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0xff, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x1f, 0x18, 0x1f, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x37,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x37, 0x30, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0x30, 0x37, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0xf7, 0x00, 0xff,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xff, 0x00, 0xf7, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x37, 0x30, 0x37, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0xff,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0xf7, 0x00, 0xf7, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0xff,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xff, 0x00, 0xff, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x3f,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x1f, 0x18, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x1f, 0x18, 0x1f, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f,
+  0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x36, 0x36, 0x36, 0xff, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0xff, 0x18, 0xff, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0xf8,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x1f, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xf0, 0xf0, 0xf0, 0xf0,
+  0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
+  0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f, 0x0f,
+  0x0f, 0x0f, 0x0f, 0x0f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x76, 0xdc, 0xd8, 0xd8, 0xd8, 0xdc, 0x76, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x78, 0xcc, 0xcc, 0xcc, 0xd8, 0xcc, 0xc6, 0xc6, 0xc6, 0xcc,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xc6, 0xc6, 0xc0, 0xc0, 0xc0,
+  0xc0, 0xc0, 0xc0, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0xfe, 0x6c, 0x6c, 0x6c, 0x6c, 0x6c, 0x6c, 0x6c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0xfe, 0xc6, 0x60, 0x30, 0x18, 0x30, 0x60, 0xc6, 0xfe,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0xd8, 0xd8,
+  0xd8, 0xd8, 0xd8, 0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x66, 0x66, 0x66, 0x66, 0x66, 0x7c, 0x60, 0x60, 0xc0, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x76, 0xdc, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e, 0x18, 0x3c, 0x66, 0x66,
+  0x66, 0x3c, 0x18, 0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x38,
+  0x6c, 0xc6, 0xc6, 0xfe, 0xc6, 0xc6, 0x6c, 0x38, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x38, 0x6c, 0xc6, 0xc6, 0xc6, 0x6c, 0x6c, 0x6c, 0x6c, 0xee,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1e, 0x30, 0x18, 0x0c, 0x3e, 0x66,
+  0x66, 0x66, 0x66, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x7e, 0xdb, 0xdb, 0xdb, 0x7e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x03, 0x06, 0x7e, 0xdb, 0xdb, 0xf3, 0x7e, 0x60, 0xc0,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x30, 0x60, 0x60, 0x7c, 0x60,
+  0x60, 0x60, 0x30, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7c,
+  0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0xc6, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0xfe, 0x00, 0x00, 0xfe, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x7e, 0x18,
+  0x18, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30,
+  0x18, 0x0c, 0x06, 0x0c, 0x18, 0x30, 0x00, 0x7e, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x0c, 0x18, 0x30, 0x60, 0x30, 0x18, 0x0c, 0x00, 0x7e,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0e, 0x1b, 0x1b, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+  0x18, 0x18, 0x18, 0x18, 0xd8, 0xd8, 0xd8, 0x70, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x7e, 0x00, 0x18, 0x18, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xdc, 0x00,
+  0x76, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x38, 0x6c, 0x6c,
+  0x38, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x0c, 0x0c,
+  0x0c, 0x0c, 0x0c, 0xec, 0x6c, 0x6c, 0x3c, 0x1c, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0xd8, 0x6c, 0x6c, 0x6c, 0x6c, 0x6c, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0xd8, 0x30, 0x60, 0xc8, 0xf8, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x7c, 0x7c, 0x7c, 0x7c, 0x7c, 0x7c, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00
+};
+unsigned int font_bin_len = 4096;
+
+---piezo.h---
+#ifndef PIEZO_H
+#define PIEZO_H
+
+#include <stdint.h>
+#include "timer.h"
+
+#define PIT_CTRL     0x43
+#define PIT_DATA2    0x42
+#define SPEAKER_CTRL 0x61
+
+void beep(uint16_t freq, uint16_t duration_ms);
+
+#endif
+
+---buildusb.sh---
+#/bin/bash
+echo "building"
+./build.sh
+echo "syncing"
+sync
+echo "writing"
+sudo dd if=TinyOS.iso of=/dev/sdb bs=4M status=progress conv=fdatasync
+echo "syncing"
+sync
+
+
+---font.bin---
+[binary file, skipping]
+
+---files.py---
+import os
+
+for filename in os.listdir('.'):
+    if os.path.isfile(filename):
+        print(f"---{filename}---")
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                print(f.read())
+        except UnicodeDecodeError:
+            print("[binary file, skipping]")
+        print()
+
+
+---isr_stubs.s---
+.code32
+
+.extern generic_crash_handler
+
+.macro EXCEPTION_STUB num
+.global isr\num
+isr\num:
+    cli
+    push %eax
+    push %ecx
+    push %edx
+    push %ebx
+    push %ebp
+    push %esi
+    push %edi
+    lea 28(%esp), %eax
+    push %eax
+    call generic_crash_handler
+    hlt
+.endm
+
+EXCEPTION_STUB 0
+EXCEPTION_STUB 1
+EXCEPTION_STUB 2
+EXCEPTION_STUB 3
+EXCEPTION_STUB 4
+EXCEPTION_STUB 5
+EXCEPTION_STUB 6
+EXCEPTION_STUB 7
+EXCEPTION_STUB 8
+EXCEPTION_STUB 9
+EXCEPTION_STUB 10
+EXCEPTION_STUB 11
+EXCEPTION_STUB 12
+EXCEPTION_STUB 13
+EXCEPTION_STUB 14
+EXCEPTION_STUB 15
+EXCEPTION_STUB 16
+EXCEPTION_STUB 17
+EXCEPTION_STUB 18
+EXCEPTION_STUB 19
+EXCEPTION_STUB 20
+EXCEPTION_STUB 21
+EXCEPTION_STUB 22
+EXCEPTION_STUB 23
+EXCEPTION_STUB 24
+EXCEPTION_STUB 25
+EXCEPTION_STUB 26
+EXCEPTION_STUB 27
+EXCEPTION_STUB 28
+EXCEPTION_STUB 29
+EXCEPTION_STUB 30
+EXCEPTION_STUB 31
+
+---fs.img---
+/hello.txt
+:START:
+"hello"
+:END:
+
+
+---build.sh---
+#!/bin/bash
+set -e
+
+CFLAGS_KERNEL="-m32 -ffreestanding -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2 -fno-pie -fno-stack-protector -nostdlib -fno-builtin-memset"
+CFLAGS_OTHER="-m32 -ffreestanding -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2 -fno-pie -fno-stack-protector -nostdlib -fno-builtin-memset"
+echo "[1/6] Clear build/"
+rm -rf build/*
+
+echo "[2/6] Assemble boot stub..."
+nasm -f elf32 boot.asm -o build/boot.o
+
+echo "[3/6] Compile kernel..."
+gcc $CFLAGS_KERNEL -c kernel.c        -o build/kernel.o
+gcc $CFLAGS_OTHER  -c timer.c         -o build/timer.o
+gcc $CFLAGS_OTHER  -c piezo.c         -o build/piezo.o
+gcc $CFLAGS_OTHER  -c font_data.c     -o build/font_data.o
+gcc $CFLAGS_OTHER  -c vga.c           -o build/vga.o
+gcc $CFLAGS_OTHER  -c fs/fat/ff.c          -o build/ff.o
+gcc $CFLAGS_OTHER  -c fs/fat/ffsystem.c    -o build/ffsystem.o
+gcc $CFLAGS_OTHER  -c fs/fat/ffunicode.c   -o build/ffunicode.o
+gcc $CFLAGS_OTHER  -c diskio_impl.c   -o build/diskio.o
+gcc $CFLAGS_OTHER  -c libc.c          -o build/libc.o
+gcc $CFLAGS_OTHER  -c fs/ata/ata.c    -o build/ata.o
+gcc $CFLAGS_OTHER  -c keyboard.c    -o build/keyboard.o
+gcc $CFLAGS_OTHER  -c snake.c    -o build/snake.o
+gcc $CFLAGS_OTHER  -c pong.c    -o build/pong.o
+gcc $CFLAGS_OTHER  -c idt.c    -o build/idt.o
+gcc $CFLAGS_OTHER  -c gdt.c    -o build/gdt.o
+gcc $CFLAGS_OTHER  -c mouse.c    -o build/mouse.o
+gcc $CFLAGS_OTHER  -c multitasking/task.c    -o build/task.o
+as --32 isr_stubs.s -o build/isr_stubs.o
+
+echo "[3/6] also Assemble ASM"
+nasm -f elf32 multitasking/switch.asm -o build/switch_mt.o
+
+echo "[4/6] Link kernel..."
+gcc -m32 -ffreestanding -nostdlib -o kernel.elf -T linker.ld \
+    build/boot.o build/kernel.o build/timer.o build/piezo.o build/font_data.o build/vga.o \
+    build/ff.o build/ffsystem.o build/ffunicode.o build/diskio.o build/libc.o build/ata.o build/keyboard.o \
+    build/snake.o build/pong.o build/idt.o build/isr_stubs.o build/gdt.o build/mouse.o build/task.o \
+    build/switch_mt.o -lgcc
+
+echo "[5/6] Create ISO..."
+mkdir -p iso/boot/grub
+cp kernel.elf iso/boot/
+cp grub.cfg iso/boot/grub/
+grub-mkrescue -o TinyOS.iso iso
+
+echo "[6/6] Done!"
+
+
+---snake.c---
+#include <stdint.h>
+#include "vga.h"
+#include "keyboard.h"
+#include "timer.h"
+
+#define MAX_SNAKE 200
+
+uint16_t lfsr = 0xACE1u;
+uint16_t bit;
+
+int snakex[MAX_SNAKE];
+int snakey[MAX_SNAKE];
+int snakelength = 1;
+
+int appleposx = 0;
+int appleposy = 0;
+
+int direction = 1;
+int score = 0;
+int runningsnake = 1;
+
+uint8_t read_scancodesnake() {
+    return inb(KEYBOARD_DATA);
+}
+
+uint16_t rand16() {
+    bit = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^ (lfsr >> 5)) & 1;
+    lfsr = (lfsr >> 1) | (bit << 15);
+    return lfsr;
+}
+
+void scorestring(int score2) {
+    char buf[10];
+    int i = 0;
+
+    if (score2 == 0) {
+        buf[i++] = '0';
+    } else {
+        int temp = score2;
+        while (temp > 0) {
+            buf[i++] = '0' + (temp % 10);
+            temp /= 10;
+        }
+    }
+
+    buf[i] = '\0';
+
+    for(int j = 0; j < i/2; j++) {
+        char t = buf[j];
+        buf[j] = buf[i-1-j];
+        buf[i-1-j] = t;
+    }
+
+    vga_print(buf);
+}
+
+void handle_key() {
+    uint8_t sc = read_scancodesnake();
+
+    switch(sc) {
+        case 0x48: if (direction != 2) {direction = 1;} break;
+        case 0x50: if (direction != 1) {direction = 2;} break;
+        case 0x4B: if (direction != 4) {direction = 3;} break;
+        case 0x4D: if (direction != 3) {direction = 4;} break;
+
+        case 0x01:
+            vga_clear();
+            vga_print("Your Score:\n");
+            scorestring(score);
+            delay_ms(2000);
+            runningsnake = 0;
+            break;
+
+        default:
+            break;
+    }
+}
+
+void spawn_apple() {
+    int istouching = 1;
+    while (istouching == 1) {
+        for (int i = 0; i < snakelength; i++) {
+            if (snakex[i] == appleposx && snakey[i] == appleposy) {
+                istouching = 1;
+            } else {
+                istouching = 0;
+            }
+        }
+        appleposx = rand16() % VGA_WIDTH;
+        appleposy = rand16() % VGA_HEIGHT;
+    }
+}
+
+void resetgame() {
+    vga_clear();
+    snakelength = 1;
+    snakex[0] = 10;
+    snakey[0] = 10;
+    spawn_apple();
+}
+
+void gameover() {
+    vga_clear();
+    vga_print("Game Over");
+    delay_ms(2000);
+    resetgame();
+}
+
+void checktouch() {
+
+    if (snakex[0] == appleposx && snakey[0] == appleposy) {
+        spawn_apple();
+        score++;
+
+        if (snakelength < MAX_SNAKE) {
+            snakelength++;
+        }
+    }
+    for (int i = 1; i < snakelength; i++) {
+        if (snakex[0] == snakex[i] && snakey[0] == snakey[i]) {
+            gameover();
+        }
+    }
+    if (snakey[0] < 0) snakey[0] = VGA_HEIGHT - 1;
+    if (snakey[0] >= VGA_HEIGHT) snakey[0] = 0;
+
+    if (snakex[0] < 0) snakex[0] = VGA_WIDTH - 1;
+    if (snakex[0] >= VGA_WIDTH) snakex[0] = 0;
+}
+
+void move() {
+
+    for(int i = snakelength - 1; i > 0; i--) {
+        snakex[i] = snakex[i-1];
+        snakey[i] = snakey[i-1];
+    }
+
+    if (direction == 1) snakey[0]--;
+    else if (direction == 2) snakey[0]++;
+    else if (direction == 3) snakex[0]--;
+    else if (direction == 4) snakex[0]++;
+}
+
+void render() {
+
+    vga_clear();
+
+    for(int i = 0; i < snakelength; i++) {
+        if (i == 0) {
+            put_block(snakex[i], snakey[i], LIGHT_GREEN, LIGHT_GREEN);
+        } else {
+            put_block(snakex[i], snakey[i], GREEN, GREEN);
+        }
+    }
+
+    put_block(appleposx, appleposy, RED, RED);
+}
+
+char snake_logo[] =
+"1111010001011110100101111\n"
+"1000011001010010101001000\n"
+"1111010101011110110001111\n"
+"0001010011010010101001000\n"
+"1111010001010010100101111\n";
+
+void snake() {
+    resetgame();
+    update_cursor(0,0);
+    logo(snake_logo);
+
+    runningsnake = 1;
+
+    timer_init();
+
+    snakelength = 1;
+    snakex[0] = 10;
+    snakey[0] = 10;
+
+    spawn_apple();
+
+    while(runningsnake == 1) {
+
+        handle_key();
+        move();
+        checktouch();
+        render();
+
+        delay_ms(100);
+    }
+
+    vga_clear();
+}
+
+---grub.cfg---
+set timeout=3
+set default=0
+insmod all_video
+insmod vbe
+insmod vga
+
+menuentry "TinyOS" {
+    multiboot /boot/kernel.elf
+    set gfxpayload=640x400x32
+    boot
+}
+
+
+---kernel.elf---
+[binary file, skipping]
+
+---libc.c---
+#include <stdint.h>
+#include "ports.h"
+
+void *memset(void *dst, int c, uint32_t n) {
+    uint8_t *d = dst;
+    while (n--) *d++ = (uint8_t)c;
+    return dst;
+}
+
+//reboot
+void reboot() {
+    outb(0x64, 0xFE);
+    while(1) { __asm__ volatile ("hlt"); }
+}
+
+void *memcpy(void *dst, const void *src, uint32_t n) {
+    uint8_t *d = dst;
+    const uint8_t *s = src;
+    while (n--) *d++ = *s++;
+    return dst;
+}
+
+int memcmp(const void *a, const void *b, uint32_t n) {
+    const uint8_t *p = a, *q = b;
+    while (n--) {
+        if (*p != *q) return *p - *q;
+        p++; q++;
+    }
+    return 0;
+}
+
+char *strchr(const char *s, int c) {
+    while (*s) {
+        if (*s == (char)c) return (char *)s;
+        s++;
+    }
+    return (c == 0) ? (char *)s : 0;
+}
+
+int startswith(const char *str, const char *prefix) {
+    while (*prefix) {
+        if (*str++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+int kstrlen(const char* str) {
+    int len = 0;
+    while (str[len]) len++;
+    return len;
+}
+
+int contains(const char* str, const char* substr) {
+    for (; *str; str++) {
+        const char* s1 = str;
+        const char* s2 = substr;
+        while (*s1 && *s2 && (*s1 == *s2)) { s1++; s2++; }
+        if (*s2 == 0) return 1;
+    }
+    return 0;
+}
+
+int strcmp(const char* a, const char* b) {
+    while(*a && (*a == *b)) { a++; b++; }
+   return *a - *b;
+}
+
+---libc.h---
+#ifndef LIBC_H
+#define LIBC_H
+#include <stdint.h>
+
+int strcmp(const char* a, const char* b);
+int contains(const char* str, const char* substr);
+int kstrlen(const char* str);
+int startswith(const char *str, const char *prefix);
+char *strchr(const char *s, int c);
+int memcmp(const void *a, const void *b, uint32_t n);
+void *memcpy(void *dst, const void *src, uint32_t n);
+void *memset(void *dst, int c, uint32_t n);
+void reboot();
+
+#endif
+
+---buttons.txt---
+
+
+---mouse.c---
+#include <stdint.h>
+#include "mouse.h"
+#include "vga.h"
+
+extern uint8_t inb(uint16_t port);
+extern void outb(uint16_t port, uint8_t val);
+
+ps2mouse_state_t mouse;
+
+uint8_t mouse_cycle = 0;
+uint8_t mouse_packet[3];
+
+int last_x = -1;
+int last_y = -1;
+int first_mouse_frame = 1;
+
+static uint32_t cursor_bg[CURSOR_SIZE * CURSOR_SIZE];
+
+static const uint8_t cursor_bitmap[CURSOR_SIZE] = {
+    0b11110000,
+    0b11000000,
+    0b10100000,
+    0b10010000,
+    0b00001000,
+    0b00000100,
+    0b00000010,
+    0b00000001
+};
+
+static void ps2mouse_wait_input() {
+    while (inb(0x64) & 2);
+}
+
+static void ps2mouse_wait_output() {
+    while (!(inb(0x64) & 1));
+}
+
+void save_cursor_bg(int x, int y)
+{
+    for (int dy = 0; dy < CURSOR_SIZE; dy++)
+    {
+        for (int dx = 0; dx < CURSOR_SIZE; dx++)
+        {
+            int px = x + dx;
+            int py = y + dy;
+
+            if (px >= (int)fb_width || py >= (int)fb_height)
+                continue;
+
+            uint32_t *pixel =
+                (uint32_t*)(fb_addr + py * fb_pitch + px * 4);
+
+            cursor_bg[dy * CURSOR_SIZE + dx] = *pixel;
+        }
+    }
+}
+
+void restore_cursor_bg(int x, int y)
+{
+    for (int dy = 0; dy < CURSOR_SIZE; dy++)
+    {
+        for (int dx = 0; dx < CURSOR_SIZE; dx++)
+        {
+            int px = x + dx;
+            int py = y + dy;
+
+            if (px >= (int)fb_width || py >= (int)fb_height)
+                continue;
+
+            uint32_t *pixel =
+                (uint32_t*)(fb_addr + py * fb_pitch + px * 4);
+
+            *pixel = cursor_bg[dy * CURSOR_SIZE + dx];
+        }
+    }
+}
+
+void draw_cursor(int x, int y)
+{
+    for (int dy = 0; dy < CURSOR_SIZE; dy++)
+    {
+        for (int dx = 0; dx < CURSOR_SIZE; dx++)
+        {
+            if (!(cursor_bitmap[dy] & (0x80 >> dx)))
+                continue;
+
+            int px = x + dx;
+            int py = y + dy;
+
+            if (px >= (int)fb_width || py >= (int)fb_height)
+                continue;
+
+            uint32_t *pixel =
+                (uint32_t*)(fb_addr + py * fb_pitch + px * 4);
+
+            *pixel ^= 0xFFFFFF;
+        }
+    }
+}
+
+void update_mouse()
+{
+    if(mouse.x == last_x && mouse.y == last_y)
+        return;
+
+    if(first_mouse_frame == 0)
+        restore_cursor_bg(last_x, last_y);
+
+    save_cursor_bg(mouse.x, mouse.y);
+
+    draw_cursor(mouse.x, mouse.y);
+
+    last_x = mouse.x;
+    last_y = mouse.y;
+
+    first_mouse_frame = 0;
+}
+
+void ps2mouse_poll()
+{
+    uint8_t status = inb(0x64);
+
+    if (!(status & 1))
+        return;
+
+    if (!(status & (1 << 5)))
+        return;
+
+    uint8_t data = inb(0x60);
+
+    mouse_packet[mouse_cycle++] = data;
+
+    if (mouse_cycle < 3)
+        return;
+
+    mouse_cycle = 0;
+
+    if (!(mouse_packet[0] & 0x08))
+        return;
+
+    int dx = (int8_t)mouse_packet[1];
+    int dy = (int8_t)mouse_packet[2];
+
+    mouse.x += dx;
+    mouse.y -= dy;
+
+    if (mouse.x < 0) mouse.x = 0;
+    if (mouse.y < 0) mouse.y = 0;
+
+    if (mouse.x > (int)fb_width - CURSOR_SIZE)
+        mouse.x = fb_width - CURSOR_SIZE;
+
+    if (mouse.y > (int)fb_height - CURSOR_SIZE)
+        mouse.y = fb_height - CURSOR_SIZE;
+
+    mouse.left   = mouse_packet[0] & 1;
+    mouse.right  = mouse_packet[0] & 2;
+    mouse.middle = mouse_packet[0] & 4;
+}
+
+static void ps2mouse_write(uint8_t data)
+{
+    ps2mouse_wait_input();
+    outb(0x64, 0xD4);
+    ps2mouse_wait_input();
+    outb(0x60, data);
+}
+
+static uint8_t ps2mouse_read()
+{
+    ps2mouse_wait_output();
+    return inb(0x60);
+}
+
+void ps2mouse_init() {
+    ps2mouse_wait_input(); outb(0x64, 0xAD); // disable keyboard
+    ps2mouse_wait_input(); outb(0x64, 0xA7); // disable mouse
+    while (inb(0x64) & 1) inb(0x60);
+    ps2mouse_wait_input(); outb(0x64, 0x20);
+    ps2mouse_wait_output();
+    uint8_t config = inb(0x60);
+    config &= ~(1 << 5); // clear "disable mouse clock"
+    config &= ~(1 << 1); // clear mouse IRQ12 enable (we're polling)
+    config &= ~(1 << 0); // clear keyboard IRQ1 enable
+    ps2mouse_wait_input(); outb(0x64, 0x60);
+    ps2mouse_wait_input(); outb(0x60, config);
+    ps2mouse_wait_input(); outb(0x64, 0xA8);
+    ps2mouse_write(0xFF);
+    uint8_t ack = ps2mouse_read();
+    uint8_t bat = ps2mouse_read();
+    uint8_t id  = ps2mouse_read();
+    ps2mouse_write(0xF6); ps2mouse_read();
+    ps2mouse_write(0xF4); ps2mouse_read();
+    ps2mouse_wait_input(); outb(0x64, 0xAE);
+    mouse.x = fb_width  / 2;
+    mouse.y = fb_height / 2;
+    char buf[8];
+    vga_print("ACK="); itoa(ack, buf); vga_print(buf);
+    vga_print(" BAT="); itoa(bat, buf); vga_print(buf);
+    vga_print(" ID=");  itoa(id,  buf); vga_print(buf);
+    vga_print("\n");
+}
+

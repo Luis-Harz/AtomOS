@@ -1,4 +1,5 @@
 #include "vga.h"
+#include "mouse.h"
 
 // ── Global definitions — exactly one copy ───────────────────────────────────
 volatile uint16_t *vga_buffer = (volatile uint16_t *)0xB8000;
@@ -24,31 +25,6 @@ static const uint32_t vga_to_rgb[16] = {
 #define FB_CHAR_H  16
 #define FB_COLS    (fb_width  / FB_CHAR_W)
 #define FB_ROWS    (fb_height / FB_CHAR_H)
-
-static inline uint32_t vga_to_rgb_func(uint32_t color) {
-    if (color <= 15) {
-        static const uint32_t vga_to_rgb[16] = {
-            0x000000, // BLACK
-            0x0000AA, // BLUE
-            0x00AA00, // GREEN
-            0x00AAAA, // CYAN
-            0xAA0000, // RED
-            0xAA00AA, // MAGENTA
-            0xAA5500, // BROWN
-            0xAAAAAA, // LIGHT_GRAY
-            0x555555, // DARK_GRAY
-            0x5555FF, // LIGHT_BLUE
-            0x55FF55, // LIGHT_GREEN
-            0x55FFFF, // LIGHT_CYAN
-            0xFF5555, // LIGHT_RED
-            0xFF55FF, // LIGHT_MAGENTA
-            0xFFFF55, // YELLOW
-            0xFFFFFF, // WHITE
-        };
-        return vga_to_rgb[color];
-    }
-    return color;
-}
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 static inline void vga_outb(uint16_t port, uint8_t val) {
@@ -194,13 +170,25 @@ int vga_used_lines(void) {
     return 0;
 }
 
-void vga_scroll(void) {
-    if (use_framebuffer) { fb_scroll(); return; }
+void vga_scroll(void)
+{
+    if (use_framebuffer)
+    {
+        if (!first_mouse_frame)
+            restore_cursor_bg(last_x, last_y);
+        fb_scroll();
+        first_mouse_frame = 1;
+        return;
+    }
     for (int y = 0; y < VGA_HEIGHT - 1; y++)
         for (int x = 0; x < VGA_WIDTH; x++)
-            vga_buffer[y * VGA_WIDTH + x] = vga_buffer[(y+1) * VGA_WIDTH + x];
+            vga_buffer[y * VGA_WIDTH + x] =
+                vga_buffer[(y + 1) * VGA_WIDTH + x];
+
     for (int x = 0; x < VGA_WIDTH; x++)
-        vga_buffer[(VGA_HEIGHT-1) * VGA_WIDTH + x] = ((uint16_t)color << 8) | ' ';
+        vga_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + x] =
+            ((uint16_t)color << 8) | ' ';
+
     cursor_y = VGA_HEIGHT - 1;
 }
 

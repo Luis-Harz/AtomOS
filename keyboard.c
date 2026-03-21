@@ -28,14 +28,46 @@ void itoa(int num, char *str) {
     }
 }
 
+int atoi(const char *str) {
+    int result = 0;
+    int sign = 1;
+    int i = 0;
+    if (str[0] == '-') {
+        sign = -1;
+        i = 1;
+    }
+
+    for (; str[i] != '\0'; i++) {
+        char c = str[i];
+        if (c >= '0' && c <= '9') {
+            result = result * 10 + (c - '0');
+        } else {
+            break;
+        }
+    }
+
+    return result * sign;
+}
+
 void itoa2(int num, char *str) {
     if (num < 10) { str[0] = '0'; str[1] = '0' + num; str[2] = 0; }
     else itoa(num, str);
 }
 
-uint8_t keyboard_read_scancode() {
+uint8_t extended = 0;
+
+uint16_t keyboard_read_scancode() {
     uint8_t status = inb(0x64);
     if (!(status & 1)) return 0;
     if (status & (1 << 5)) return 0;
-    return inb(0x60);
+    uint8_t sc = inb(0x60);
+    if (sc == 0xE0) {
+        extended = 1;
+        return 0;
+    }
+    if (extended) {
+        extended = 0;
+        return 0xE000 | sc;
+    }
+    return sc;
 }

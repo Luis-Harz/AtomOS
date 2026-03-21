@@ -9,7 +9,7 @@
 #define ATA_DRIVE_HEAD  0x1F6
 #define ATA_STATUS      0x1F7
 #define ATA_COMMAND     0x1F7
-
+#define ATA_TIMEOUT 100000
 #define ATA_STATUS_BSY  0x80
 #define ATA_STATUS_RDY  0x40
 #define ATA_STATUS_DRQ  0x08
@@ -38,11 +38,16 @@ static inline void outw(uint16_t port, uint16_t val) {
     __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
 }
 
-static void ata_wait_bsy(void) {
-    while (inb(ATA_STATUS) & ATA_STATUS_BSY);
+static int ata_wait_bsy(void) {
+    int t = ATA_TIMEOUT;
+    while ((inb(ATA_STATUS) & ATA_STATUS_BSY) && --t > 0);
+    return t > 0 ? 0 : -1;  // -1 = timeout
 }
-static void ata_wait_drq(void) {
-    while (!(inb(ATA_STATUS) & ATA_STATUS_DRQ));
+
+static int ata_wait_drq(void) {
+    int t = ATA_TIMEOUT;
+    while (!(inb(ATA_STATUS) & ATA_STATUS_DRQ) && --t > 0);
+    return t > 0 ? 0 : -1;
 }
 
 static void ata_setup(uint32_t lba, uint8_t count) {
@@ -58,12 +63,9 @@ int ata_read(uint8_t *buf, uint32_t lba, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         ata_setup(lba + i, 1);
         outb(ATA_COMMAND, ATA_CMD_READ);
-        ata_wait_bsy();
-        ata_wait_drq();
-
-        if (inb(ATA_STATUS) & ATA_STATUS_ERR)
-            return -1;
-
+        if (ata_wait_bsy() != 0) return -1;   // timeout
+        if (ata_wait_drq() != 0) return -1;   // timeout
+        if (inb(ATA_STATUS) & ATA_STATUS_ERR) return -1;
         uint16_t *ptr = (uint16_t *)(buf + i * 512);
         for (int j = 0; j < 256; j++)
             ptr[j] = inw(ATA_DATA);
@@ -83,14 +85,10 @@ typedef struct {
 
 uint32_t ata_find_fat_partition(void) {
     uint8_t mbr[512];
-    if (ata_read(mbr, 0, 1) != 0)
-        return 0;
-    
-    if (mbr[510] != 0x55 || mbr[511] != 0xAA)
-        return 0;
-    
+    if (ata_read(mbr, 0, 1) != 0) return 0;
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) return 0;
     mbr_partition_t *parts = (mbr_partition_t *)(mbr + 0x1BE);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         uint8_t type = parts[i].type;
         if (type == 0x0B || type == 0x0C || type == 0x06) {
             fat_partition_lba = parts[i].lba_start;
@@ -104,19 +102,14 @@ int ata_write(const uint8_t *buf, uint32_t lba, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         ata_setup(lba + i, 1);
         outb(ATA_COMMAND, ATA_CMD_WRITE);
-        ata_wait_bsy();
-        ata_wait_drq();
-
-        if (inb(ATA_STATUS) & ATA_STATUS_ERR)
-            return -1;
-
+        if (ata_wait_bsy() != 0) return -1;
+        if (ata_wait_drq() != 0) return -1;
+        if (inb(ATA_STATUS) & ATA_STATUS_ERR) return -1;
         const uint16_t *ptr = (const uint16_t *)(buf + i * 512);
         for (int j = 0; j < 256; j++)
             outw(ATA_DATA, ptr[j]);
-
-        /* flush cache */
         outb(ATA_COMMAND, 0xE7);
-        ata_wait_bsy();
+        if (ata_wait_bsy() != 0) return -1;
     }
     return 0;
 }

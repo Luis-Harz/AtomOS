@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "vga.h"
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -129,6 +130,16 @@ static inline u32 _inl(u16 port) {
     return val;
 }
 
+static inline void _outw(uint16_t port, uint16_t val) {
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint16_t _inw(uint16_t port) {
+    uint16_t val;
+    __asm__ volatile ("inw %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
 /* =====================================================================
  * CONFIG READ/WRITE
  * ===================================================================== */
@@ -172,7 +183,7 @@ static inline void pci_cfg_write8(u8 bus, u8 dev, u8 func, u8 reg, u8 val) {
  * ===================================================================== */
 
 static inline bool pci_probe_bar(u8 bus, u8 dev, u8 func,
-                                 u8 idx, pci_bar_t *out) {
+    u8 idx, pci_bar_t *out) {
     u8  reg  = (u8)(PCI_REG_BAR0 + idx * 4u);
     u32 orig = pci_cfg_read32(bus, dev, func, reg);
     if (orig == 0xFFFFFFFFu) {

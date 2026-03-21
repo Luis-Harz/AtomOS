@@ -132,7 +132,6 @@ void present() {
             char ch      = entry & 0x00FF;
             uint8_t fg   = (entry & 0x0F00) >> 8;
             uint8_t bg   = (entry & 0xF000) >> 12;
-
             put_char(x, y, ch, fg, bg);
         }
     }
@@ -186,4 +185,5 @@ void pong() {
         delay_ms(8);        // 4. ~60fps
     }
     resetgamepong();
+    vga_clear();
 }

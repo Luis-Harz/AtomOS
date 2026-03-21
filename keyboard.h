@@ -11,7 +11,8 @@ extern char scancode_to_ascii[256];
 extern char scancode_upper[256];
 
 void itoa(int num, char *str);
+int atoi(const char *str);
 void itoa2(int num, char *str);
-uint8_t keyboard_read_scancode(void);
+uint16_t keyboard_read_scancode(void);
 
 #endif

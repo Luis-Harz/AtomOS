@@ -10,17 +10,30 @@
 #include "gdt.h"
 #include "piezo.h"
 #include "fs/ata/ata.h"
+#include "login.h"
+#include "libc.h"
 #include "mouse.h"
 #include "fs/fat/ff.h"
 #include "fs/fat/diskio.h"
 #include "pci.h"
+#include "kernel.h"
 #include "pong.h"
+#define MAX_WINDOWS 7
+#define SPACES 7
 #define CURSOR_SIZE 8
 static FATFS fatfs;
-#define version "0.0.5\n"
+#define version "0.0.6\n"
 fs_t fs;
 static pci_bus_t g_pci_bus;
 static uint32_t cursor_bg[CURSOR_SIZE * CURSOR_SIZE];
+int desktopmode = 0;
+int testmode = 0;
+int win_pressed = 0;
+int alt_pressed = 0;
+
+//Multitasking
+#include "multitasking/task.h"
+#include "multitasking/pit.h"
 
 //PCI
 static void print_hex(u32 val, int digits)
@@ -93,11 +106,6 @@ void pci_list_devices(pci_bus_t *bus)
 }
 //END PCI
 
-int strcmp(const char* a, const char* b) {
-    while(*a && (*a == *b)) { a++; b++; }
-   return *a - *b;
-}
-
 //----Test Crash----
 void test_crash_div0() {
     int a = 1;
@@ -124,32 +132,52 @@ void echo(char* command, char* toecho, int length) {
     toecho[j] = 0;
 }
 
-int startswith(const char *str, const char *prefix) {
-    while (*prefix) {
-        if (*str++ != *prefix++) return 0;
+//Calc
+int calc(char input[128]) {
+    int result = 0;
+    int num = 0;
+    char op = '+';
+
+    for (int i = 0; input[i] != '\0'; i++) {
+        char c = input[i];
+        if (c >= '0' && c <= '9') {
+            num = num * 10 + (c - '0');
+        } else if (c == '+' || c == '-' || c == '*' || c == '/') {
+            if (op == '+') result += num;
+            else if (op == '-') result -= num;
+            else if (op == '*') result *= num;
+            else if (op == '/') result /= num;
+
+            op = c;
+            num = 0;
+        }
     }
-    return 1;
+
+    if (op == '+') result += num;
+    else if (op == '-') result -= num;
+    else if (op == '*') result *= num;
+    else if (op == '/') result /= num;
+
+    return result;
 }
 
-int kstrlen(const char* str) {
-    int len = 0;
-    while (str[len]) len++;
-    return len;
-}
-
-int contains(const char* str, const char* substr) {
-    for (; *str; str++) {
-        const char* s1 = str;
-        const char* s2 = substr;
-        while (*s1 && *s2 && (*s1 == *s2)) { s1++; s2++; }
-        if (*s2 == 0) return 1;
+void task1() {
+    while (1) {
+        vga_print("A");
+        delay_ms(100);
     }
-    return 0;
 }
 
-void reboot() {
-    outb(0x64, 0xFE);
-    while(1) { __asm__ volatile ("hlt"); }
+void task2() {
+    while (1) {
+        vga_print("B");
+        delay_ms(100);
+    }
+}
+
+//ASCII tools
+void ascii(char tool[128]) {
+
 }
 
 void check_command(char* command) {
@@ -187,9 +215,9 @@ void check_command(char* command) {
     else if (startswith(command, "triangle")) {
         vga_clear();
         if (use_framebuffer == 1) {
-            int x0 = 700, y0 = 50;
-            int x1 = 650,  y1 = 150;
-            int x2 = 750, y2 = 150;
+            int x0 = 400, y0 = 25;
+            int x1 = 350,  y1 = 100;
+            int x2 = 450, y2 = 100;
             char *color_str = command + 9;
             uint32_t color = 0xFF0000;
             if (strcmp(color_str, "red") == 0)        color = RED;
@@ -256,6 +284,13 @@ void check_command(char* command) {
         else
             vga_print("Write failed!\n");
     }
+    else if (startswith(command, "0") || startswith(command, "1") || startswith(command, "2") || startswith(command, "3") || startswith(command, "4") || startswith(command, "5") || startswith(command, "6") || startswith(command, "7") || startswith(command, "8") || startswith(command, "9")) {
+        vga_print("Result: ");
+        char result[128];
+        itoa(calc(command), result);
+        vga_print(result);
+        vga_print("\n");
+    }
     else if (strcmp(command, "ontime") == 0) {
         int timesince = ms_since_startup();
         int timesinces = timesince / 1000;
@@ -263,6 +298,16 @@ void check_command(char* command) {
         itoa(timesinces, timesincesStr);
         vga_print(timesincesStr);
         vga_print("s since startup\n");
+    }
+    else if (strcmp(command, "multitaskingtest") == 0) {
+        create_task(task1, 0);
+        create_task(task2, 1);
+        char buf[16];
+        vga_print("t0 esp="); itoa((int)tasks[0].esp, buf); vga_print(buf); vga_print("\n");
+        vga_print("t1 esp="); itoa((int)tasks[1].esp, buf); vga_print(buf); vga_print("\n");
+        vga_print("t0 act="); itoa(tasks[0].active, buf); vga_print(buf); vga_print("\n");
+        vga_print("t1 act="); itoa(tasks[1].active, buf); vga_print(buf); vga_print("\n");
+        start_tasks();
     }
     else if (startswith(command, "rm ")) {
         char* path = command + 3;
@@ -280,102 +325,16 @@ void check_command(char* command) {
     }
 }
 
-//---------------------Mouse---------------------
-static int last_x = -1;
-static int last_y = -1;
-
-void xor_cursor(int x, int y)
-{
-    for (int dy = 0; dy < CURSOR_SIZE; dy++) {
-        for (int dx = 0; dx <= dy; dx++) {
-
-            int px = x + dx;
-            int py = y + dy;
-
-            if (px >= fb_width || py >= fb_height)
-                continue;
-
-            uint32_t *pixel =
-                (uint32_t*)(fb_addr + py * fb_pitch + px * 4);
-
-            *pixel ^= 0x00FFFFFF;
-        }
-    }
-}
-
-void ps2mouse_poll() {
-    uint8_t status = inb(0x64);
-    if (!(status & 1)) return;
-    if (!(status & (1 << 5))) return;
-    uint8_t data = inb(0x60);
-    static uint8_t mouse_cycle = 0;
-    static uint8_t mouse_packet[3];
-    mouse_packet[mouse_cycle++] = data;
-    if (mouse_cycle < 3) return;
-    mouse_cycle = 0;
-    if (!(mouse_packet[0] & 0x08)) return;
-    int dx = (int8_t)mouse_packet[1];
-    int dy = (int8_t)mouse_packet[2];
-    mouse.x += dx;
-    mouse.y -= dy;
-}
-
-void update_mouse() {
-    if(mouse.x == last_x && mouse.y == last_y) {
-        return;
-    }
-    //Revert Mouse
-    xor_cursor(last_x, last_y);
-    //Draw New One
-    xor_cursor(mouse.x, mouse.y);
-    //Save Pos
-    last_x = mouse.x;
-    last_y = mouse.y;
-}
-
-char tinyos_logo[] =
-"1111100000000000111101111\n"
-"0010001000000000100101000\n"
-"0010000011101010100101111\n"
-"0010001010101110100100001\n"
-"0010001010100010111101111\n";
-
-void kernel_main(uint32_t magic, uint32_t mb_addr) {
-    multiboot_info_t *mb = (multiboot_info_t *)mb_addr;
-    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
-    vga[0] = 0x0F00 | 'A';
-    vga[1] = 0x0F00 | 'B';
-    vga[2] = 0x0F00 | 'C';
-    vga_init(mb);
-    vga_print("Screen Good!");
-    timer_init();
-    vga_clear();
-    uint32_t fat_lba = ata_find_fat_partition();
-    if (fat_lba == 0) vga_print("No FAT partition found!\n");
-    else {
-        vga_print("FAT partition at LBA: ");
-        vga_print("\n");
-    }
-    FRESULT mr = f_mount(&fatfs, "0:", 0);
-    if (mr == FR_OK) vga_print("FAT mount OK\n");
-    else vga_print("FAT mount FAILED\n");
-    vga_print("1");
-    vga_print("2");
-    vga_print("3");
+//mouse
+void mouse_update() {
     if (use_framebuffer) {
-        vga_print("mouse init\n");
-        ps2mouse_init();
-        mouse.x = fb_width / 2;
-        mouse.y = fb_height / 2;
-        vga_print("mouse init done\n");
+        ps2mouse_poll();
+        update_mouse();
     }
-    gdt_init();
-    vga_print("Init IDT");
-    idt_init();
-    vga_print("Init IDT Done");
-    update_cursor(0, 0);
-    vga_clear();
-    logo(tinyos_logo);
+}
+
+//----------Shell----------
+void shell(char* user) {
     //static pci_bus_t bus = {0};
     vga_print("A\n");
     //cli();
@@ -386,27 +345,25 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
     pci_list_devices(&g_pci_bus);
     vga_print("C\n");
     vga_print("Welcome to TinyOS!\n");
-    vga_print("This is an OS written in C!\n");
     char command[128];
-    char lastcommand[128];
     int cmd_index = 0;
     int shift_pressed = 0;
     char c;
+    int clickedbutton;
+    //makebutton(50, 50, 50, 50);
     while(1) {
+        vga_print(user);
         vga_print("> ");
         while(1) {
+            //drawbuttons();
+            //checkbuttonsclicked(&clickedbutton);
             update_cursor(cursor_x, cursor_y);
-            if (use_framebuffer) {
-                ps2mouse_poll();
-                update_mouse();
-            }
-            uint8_t scancode = keyboard_read_scancode();
+            uint16_t scancode = keyboard_read_scancode();
             if (scancode == 0x2A || scancode == 0x36) {
                 shift_pressed = 1;
             } else if (scancode == 0xAA || scancode == 0xB6) { 
                 shift_pressed = 0;
-            }
-            
+            }    
             if (shift_pressed == 0) {
                 c = scancode_to_ascii[scancode];
             } else {
@@ -430,6 +387,71 @@ void kernel_main(uint32_t magic, uint32_t mb_addr) {
                     }
                 }
             }
+            mouse_update();
         }
     }
+}
+
+//----------Kernel Main----------
+char tinyos_logo[] =
+"1111100000000000111101111\n"
+"0010001000000000100101000\n"
+"0010000011101010100101111\n"
+"0010001010101110100100001\n"
+"0010001010100010111101111\n";
+
+void kernel_main(uint32_t magic, uint32_t mb_addr) {
+    multiboot_info_t *mb = (multiboot_info_t *)mb_addr;
+    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
+    vga[0] = 0x0F00 | 'A';
+    vga[1] = 0x0F00 | 'B';
+    vga[2] = 0x0F00 | 'C';
+    //Inits
+    vga_init(mb);
+    vga_print("Screen Good!");
+    vga_clear();
+    gdt_init();
+    idt_init();
+    timer_init();
+    task_init();
+    pit_init(100);
+    if (use_framebuffer) {
+        vga_print("mouse init\n");
+        ps2mouse_init();
+        mouse.x = fb_width / 2;
+        mouse.y = fb_height / 2;
+        last_x = mouse.x;
+        last_y = mouse.y;
+        vga_print("mouse init done\n");
+    }
+
+    uint32_t fat_lba = ata_find_fat_partition();
+    if (fat_lba == 0) vga_print("No FAT partition found!\n");
+    else vga_print("FAT partition found!\n");
+
+    FRESULT mr = f_mount(&fatfs, "0:", 0);
+    if (mr == FR_OK) vga_print("FAT mount OK\n");
+    else vga_print("FAT mount FAILED\n");
+
+    update_cursor(0, 0);
+    logo(tinyos_logo);
+    vga_print("Loading Users\n");
+    load_users();
+    vga_print("Loading Users Done\n");
+
+    if (testmode == 0) {
+        char* loginstatus = login();
+        if (strcmp(loginstatus, "0") != 0) {
+            shell(loginstatus);
+        } else {
+            vga_print("too many times wrong. Rebooting...");
+            delay_ms(500);
+            reboot();
+        }
+    } else {
+        shell("test");
+    }
+
+    vga_print("Seems like the shell stopped...");
+    __asm__ volatile("hlt");
 }

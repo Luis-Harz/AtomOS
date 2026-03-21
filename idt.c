@@ -1,4 +1,6 @@
 #include "idt.h"
+#include "multitasking/irq0.c"
+#include "mouse.h"
 
 struct idt_entry idt[256];
 struct idt_ptr   idtp;
@@ -12,6 +14,39 @@ char crash_logo[] =
     "0010000100001\n"
     "01000000000001\n"
     "111111111111111\n";
+
+void unhandled_irq() {
+    outb(0xA0, 0x20);
+    outb(0x20, 0x20);
+}
+
+__asm__(
+    ".section .text\n\t"
+    ".extern unhandled_irq\n\t"
+    ".global unhandled_irq_stub\n\t"
+    "unhandled_irq_stub:\n\t"
+    "cli\n\t"
+    "pusha\n\t"
+    "call unhandled_irq\n\t"
+    "popa\n\t"
+    "sti\n\t"
+    "iret\n\t"
+);
+extern void unhandled_irq_stub();
+
+#define IRQ_STUB(num, handler) \
+    extern void irq##num##_stub(); \
+    __asm__( \
+        ".global irq" #num "_stub\n\t" \
+        "irq" #num "_stub:\n\t" \
+        "cli\n\t" \
+        "pusha\n\t" \
+        "call " #handler "\n\t" \
+        "popa\n\t" \
+        "sti\n\t" \
+        "iret\n\t" \
+    );
+
 
 void generic_crash_handler(struct interrupt_frame* frame) {
     vga_clear();
@@ -49,6 +84,11 @@ __asm__( \
 "hlt\n\t" \
 );
 
+void irq14_handler() {
+    outb(0xA0, 0x20);  // EOI to slave PIC
+    outb(0x20, 0x20);  // EOI to master PIC
+}
+
 extern void isr0();  extern void isr1();  extern void isr2();  extern void isr3();
 extern void isr4();  extern void isr5();  extern void isr6();  extern void isr7();
 extern void isr8();  extern void isr9();  extern void isr10(); extern void isr11();
@@ -58,9 +98,25 @@ extern void isr20(); extern void isr21(); extern void isr22(); extern void isr23
 extern void isr24(); extern void isr25(); extern void isr26(); extern void isr27();
 extern void isr28(); extern void isr29(); extern void isr30(); extern void isr31();
 
+void pic_remap() {
+    outb(0x20, 0x11);
+    outb(0xA0, 0x11);
+    outb(0x21, 0x20);
+    outb(0xA1, 0x28);
+    outb(0x21, 0x04);
+    outb(0xA1, 0x02);
+    outb(0x21, 0x01);
+    outb(0xA1, 0x01);
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+}
+
 void idt_init() {
+    __asm__("cli");
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
     for (int i = 0; i < 256; i++)
-        idt_set_gate(i, 0, 0x08, 0x8E);
+        idt_set_gate(i, (uint32_t)unhandled_irq_stub, 0x08, 0x8E);
 
     idt_set_gate(0,  (uint32_t)isr0,  0x08, 0x8E);
     idt_set_gate(1,  (uint32_t)isr1,  0x08, 0x8E);
@@ -94,5 +150,11 @@ void idt_init() {
     idt_set_gate(29, (uint32_t)isr29, 0x08, 0x8E);
     idt_set_gate(30, (uint32_t)isr30, 0x08, 0x8E);
     idt_set_gate(31, (uint32_t)isr31, 0x08, 0x8E);
+    extern void irq0_stub();
+    idt_set_gate(0x20, (uint32_t)irq0_stub, 0x08, 0x8E);
     idt_load();
+    pic_remap();
+    outb(0xA1, 0xAF);
+
+    __asm__("sti");
 }
