@@ -1,6 +1,6 @@
-# TinyOS
-A OS written by me in C.
-It's really lightweight.
+# AtomOS
+A OS written by me in C. <br>
+It's really lightweight. <br>
 ## Why?
 i made it because i wanted to learn a bit of Bare Metal C or also called freestanding C.
 ## Infos
