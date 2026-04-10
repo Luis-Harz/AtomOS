@@ -21,21 +21,23 @@ stack_top:
 
 section .text
 _start:
-    mov esp, stack_top
-    push ebx        ; multiboot info pointer  
-    push eax        ; multiboot magic
-    mov al, 0xFF
-    out 0x21, al
-    out 0xA1, al
+    mov  esp, stack_top
 
-    ; Zero BSS
-    mov edi, _bss_start
-    mov ecx, _bss_end
-    sub ecx, edi
-    shr ecx, 2
-    xor eax, eax
-    rep stosd
+    ; Save multiboot values on stack BEFORE BSS zero wipes eax
+    push ebx             ; multiboot info pointer
+    push eax             ; multiboot magic
+
+    ; Zero BSS (trashes eax, edi, ecx — but we saved what we need)
+    mov  edi, _bss_start
+    mov  ecx, _bss_end
+    sub  ecx, edi
+    shr  ecx, 2
+    xor  eax, eax
+    rep  stosd
+
+    ; Args already on stack in correct order for kernel_main(magic, mb_addr)
     call kernel_main
+
     cli
 .hang:
     hlt

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>TinyOS</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: Arial;
+            margin: 0;
+            height: 100%;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        header {
+            background: #161b22;
+            padding: 20px;
+            text-align: center;
+            font-size: 24px;
+        }
+
+        nav {
+            background: #21262d;
+            padding: 10px;
+            text-align: center;
+        }
+
+        nav a {
+            color: #58a6ff;
+            margin: 10px;
+            text-decoration: none;
+        }
+
+        section {
+            padding: 20px;
+        }
+
+        .card {
+            background: #161b22;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+        }
+        footer {
+            text-align: center;
+            padding: 10px;
+            background: #161b22;
+        }
+        img {
+            padding: 10px;
+            border-radius: 10px;
+            background: #161b22;
+            display: block;
+            margin: 20px auto;
+        }
+    </style>
+</head>
+<body>
+
+<header>TinyOS Kernel</header>
+
+<nav>
+    <a href="#about">About</a>
+    <a href="#about-me">About Me</a>
+    <a href="#download">Download</a>
+    <a href="#features">Features</a>
+</nav>
+
+<img src="images/logo_nobg.png" height="100px" width="200px">
+
+<section id="about">
+    <div class="card">
+        <h2>What is TinyOS?</h2>
+        <p>It is a selfmade Kernel in C. Right now it has 3700 lines of code.</p>
+    </div>
+</section>
+
+<section id="features">
+    <div class="card">
+        <h2>Features</h2>
+        <ul>
+            <li>Own scheduler</li>
+            <li>Multitasking</li>
+            <li>VGA-Framebuffer<a href="#vga" style="color: white; text-decoration: none;">*</a></li>
+            <li>Shell</li>
+            <li>Login</li>
+            <li>Filesystem</li>
+            <li>ATA</li>
+        </ul>
+    </div>
+</section>
+
+<section id="vga">
+    <div class="card">
+        <h2>VGA-Framebuffer</h2>
+        <p>It actually uses if available a Framebuffer set up by Grub.</p>
+        <p>It should also work on HDMI and DP, you can try it out.</p>
+    </div>
+</section>
+
+<section id="download">
+    <div class="card">
+        <h2>Download</h2>
+        <p><a href="https://github.com/Luis-Harz/TinyOS/releases/" style="color: #c9d1d9; text-decoration: none;">Github Releases</a></p>
+    </div>
+</section>
+
+<section id="about-me">
+    <div class="card">
+        <h2>About Me</h2>
+        <p>
+            Hi, I'm a young developer with a strong interest in low-level programming and operating system development. <br>
+            I'm currently working on TinyOS, where I experiment with multitasking and kernel design.
+        </p>
+    </div>
+</section>
+
+<footer>TinyOS © 2026</footer>
+
+</body>
+</html>

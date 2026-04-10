@@ -96,6 +96,7 @@ void resetgame() {
     snakelength = 1;
     snakex[0] = 10;
     snakey[0] = 10;
+    score = 0;
     spawn_apple();
 }
 

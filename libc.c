@@ -7,10 +7,35 @@ void *memset(void *dst, int c, uint32_t n) {
     return dst;
 }
 
+void str_pad_left(const char *src, char *dst, int width) {
+    int len = 0;
+    while (src[len]) len++;
+    int pad = width - len;
+    if (pad < 0) pad = 0;
+    int i = 0;
+    for (int j = 0; j < pad; j++) {
+        dst[i++] = ' ';
+    }
+
+    for (int j = 0; j < len; j++) {
+        dst[i++] = src[j];
+    }
+
+    dst[i] = 0;
+}
+
 //reboot
 void reboot() {
     outb(0x64, 0xFE);
     while(1) { __asm__ volatile ("hlt"); }
+}
+
+void kstrncpy(char* dest, const char* src, uint32_t max) {
+    uint32_t i = 0;
+    for (; i < max - 1 && src[i]; i++) {
+        dest[i] = src[i];
+    }
+    dest[i] = '\0';
 }
 
 void *memcpy(void *dst, const void *src, uint32_t n) {

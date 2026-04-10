@@ -1,5 +1,7 @@
 #ifndef KERNEL_H
 #define KERNEL_H
-//Nothing Yet
+
+int get_keyboard_layout();
+void shell();
 
 #endif

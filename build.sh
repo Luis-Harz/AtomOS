@@ -27,23 +27,26 @@ gcc $CFLAGS_OTHER  -c pong.c    -o build/pong.o
 gcc $CFLAGS_OTHER  -c idt.c    -o build/idt.o
 gcc $CFLAGS_OTHER  -c gdt.c    -o build/gdt.o
 gcc $CFLAGS_OTHER  -c mouse.c    -o build/mouse.o
-gcc $CFLAGS_OTHER  -c multitasking/task.c    -o build/task.o
+gcc $CFLAGS_OTHER  -c ttys.c    -o build/tty.o
+gcc $CFLAGS_OTHER  -c memory.c    -o build/memory.o
+gcc $CFLAGS_OTHER  -c multitasking.c    -o build/multitasking.o
+#gcc $CFLAGS_OTHER  -c multitasking/task.c    -o build/task.o
 as --32 isr_stubs.s -o build/isr_stubs.o
 
 echo "[3/6] also Assemble ASM"
-nasm -f elf32 multitasking/switch.asm -o build/switch_mt.o
+#nasm -f elf32 multitasking/switch.asm -o build/switch_mt.o
 
 echo "[4/6] Link kernel..."
 gcc -m32 -ffreestanding -nostdlib -o kernel.elf -T linker.ld \
     build/boot.o build/kernel.o build/timer.o build/piezo.o build/font_data.o build/vga.o \
     build/ff.o build/ffsystem.o build/ffunicode.o build/diskio.o build/libc.o build/ata.o build/keyboard.o \
-    build/snake.o build/pong.o build/idt.o build/isr_stubs.o build/gdt.o build/mouse.o build/task.o \
-    build/switch_mt.o -lgcc
+    build/snake.o build/pong.o build/idt.o build/isr_stubs.o build/gdt.o build/mouse.o build/tty.o \
+    build/memory.o build/multitasking.o -lgcc
 
 echo "[5/6] Create ISO..."
 mkdir -p iso/boot/grub
 cp kernel.elf iso/boot/
 cp grub.cfg iso/boot/grub/
-grub-mkrescue -o TinyOS.iso iso
+grub-mkrescue -o AtomOS.iso iso
 
 echo "[6/6] Done!"

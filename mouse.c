@@ -107,12 +107,9 @@ void update_mouse()
         restore_cursor_bg(last_x, last_y);
 
     save_cursor_bg(mouse.x, mouse.y);
-
     draw_cursor(mouse.x, mouse.y);
-
     last_x = mouse.x;
     last_y = mouse.y;
-
     first_mouse_frame = 0;
 }
 
@@ -127,26 +124,20 @@ void ps2mouse_poll()
         return;
 
     uint8_t data = inb(0x60);
-
     mouse_packet[mouse_cycle++] = data;
-
     if (mouse_cycle < 3)
         return;
 
     mouse_cycle = 0;
-
     if (!(mouse_packet[0] & 0x08))
         return;
 
     int dx = (int8_t)mouse_packet[1];
     int dy = (int8_t)mouse_packet[2];
-
     mouse.x += dx;
     mouse.y -= dy;
-
     if (mouse.x < 0) mouse.x = 0;
     if (mouse.y < 0) mouse.y = 0;
-
     if (mouse.x > (int)fb_width - CURSOR_SIZE)
         mouse.x = fb_width - CURSOR_SIZE;
 
@@ -180,7 +171,7 @@ void ps2mouse_init() {
     ps2mouse_wait_output();
     uint8_t config = inb(0x60);
     config &= ~(1 << 5); // clear "disable mouse clock"
-    config &= ~(1 << 1); // clear mouse IRQ12 enable (we're polling)
+    config &= ~(1 << 1); // clear mouse IRQ12 enable
     config &= ~(1 << 0); // clear keyboard IRQ1 enable
     ps2mouse_wait_input(); outb(0x64, 0x60);
     ps2mouse_wait_input(); outb(0x60, config);

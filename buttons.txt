@@ -1,0 +1,27 @@
+typedef struct {
+    int x;
+    int y;
+    int height;
+    int width;
+} button;
+
+button buttons[1024];
+int buttoncount = 0;
+
+void makebutton(int x, int y, int height, int width) {
+    buttons[buttoncount].x = x;
+    buttons[buttoncount].y = y;
+    buttons[buttoncount].height = height;
+    buttons[buttoncount].width = width;
+    buttoncount++;
+}
+
+void checkbuttonsclicked(int *buttonclicked) {
+    for (int i = 0; i < buttoncount; i++) {
+        if (mouse.x < buttons[i].x + buttons[i].width && mouse.y < buttons[i].y + buttons[i].height && mouse.x > buttons[i].x && mouse.y > buttons[i].y) {
+            *buttonclicked = i;
+        } else {
+            *buttonclicked = -1;
+        }
+    }
+}

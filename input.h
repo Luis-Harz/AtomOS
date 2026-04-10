@@ -1,12 +1,14 @@
 #ifndef INPUT_H
 #define INPUT_H
 #include "keyboard.h"
+#include "kernel.h"
 #include <stdint.h>
 #include "vga.h"
-void input(char *input) {
+void input(char *input, int max_len) {
     char command[128];
     int cmd_index = 0;
     char c;
+    int keyboard_layout = get_keyboard_layout();
     while (1) {
         uint8_t scancode = keyboard_read_scancode();
         int shift_pressed = 0;
@@ -16,16 +18,16 @@ void input(char *input) {
             shift_pressed = 0;
         }
         if (shift_pressed == 0) {
-            c = scancode_to_ascii[scancode];
+            c = scancodes_lower[keyboard_layout][scancode];
         } else {
-            c = scancode_upper[scancode];
+            c = scancodes_upper[keyboard_layout][scancode];
         }
         if (c) {
             if (c == '\n') {
                 vga_putc(c);
                 command[cmd_index] = 0;
                 cmd_index = 0;
-                for (int i = 0; i < 127; i++) {
+                for (int i = 0; i < max_len - 1; i++) {
                     input[i] = command[i];
                 }
                 for (int i = 0; i < 128; i++)

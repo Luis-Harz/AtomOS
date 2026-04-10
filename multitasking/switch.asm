@@ -4,21 +4,21 @@ extern tasks
 extern current_task
 
 %define TASK_SIZE 8
+%define TASK_ESP  0
 
 switch_task:
     pusha
     mov eax, [current_task]
-    mov [tasks + eax*TASK_SIZE], esp
+    mov [tasks + eax*TASK_SIZE + TASK_ESP], esp
 
 .next:
     inc eax
     cmp eax, 4
     jl .ok
     mov eax, 0
-
 .ok:
     mov [current_task], eax
-    mov esp, [tasks + eax*TASK_SIZE]
+    mov esp, [tasks + eax*TASK_SIZE + TASK_ESP]
 
     popa
     ret

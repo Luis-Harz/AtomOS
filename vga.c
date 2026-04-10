@@ -36,7 +36,7 @@ void fb_putpixel(uint32_t x, uint32_t y, uint32_t c) {
     *pixel = vga_to_rgb_func(c);
 }
 
-static void fb_draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
+void fb_draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
     int dx = x1 - x0;
     int dy = y1 - y0;
     int sx = (dx >= 0) ? 1 : -1;
@@ -144,6 +144,10 @@ void vga_init(multiboot_info_t *mb) {
     }
 }
 
+void change_color_vga(uint8_t in_color) {
+    color = in_color;
+}
+
 void update_cursor(int x, int y) {
     if (!use_framebuffer) {
         uint16_t pos = (uint16_t)(y * VGA_WIDTH + x);
@@ -220,14 +224,17 @@ void vga_clear(void) {
         uint32_t bgc = vga_to_rgb[0];
         for (uint32_t y = 0; y < fb_height; y++) {
             uint32_t *row = (uint32_t *)(fb_addr + y * fb_pitch);
-            for (uint32_t x = 0; x < fb_width; x++)
-                row[x] = bgc;
+            for (uint32_t x = 0; x < fb_width; x++) {
+                if (row[x] != bgc)
+                    row[x] = bgc;
+            }
         }
     } else {
         uint16_t blank = ((uint16_t)color << 8) | ' ';
         for (int y = 0; y < VGA_HEIGHT; y++)
             for (int x = 0; x < VGA_WIDTH; x++)
-                vga_buffer[y * VGA_WIDTH + x] = blank;
+                if (vga_buffer[y * VGA_WIDTH + x] != blank)
+                    vga_buffer[y * VGA_WIDTH + x] = blank;
     }
 }
 
@@ -265,7 +272,7 @@ void logo(char *lg) {
     vga_clear();
     int cols = use_framebuffer ? (int)FB_COLS : VGA_WIDTH;
     int rows = use_framebuffer ? (int)FB_ROWS : VGA_HEIGHT;
-    int logo_width  = 25;
+    int logo_width  = 36;
     int logo_height = 5;
     int start_x = (cols - logo_width) / 2;
     int start_y = (rows - logo_height) / 2;
@@ -297,4 +304,21 @@ void logo_crash(char *lg) {
         else if (*p == '\n') { cursor_x = start_x; cursor_y++; }
     }
     color = saved_color;
+}
+
+char panic_logo[] =
+    "00000001\n"
+    "000000101\n"
+    "0000010101\n"
+    "00001001001\n"
+    "000100000001\n"
+    "0010000100001\n"
+    "01000000000001\n"
+    "111111111111111\n";
+
+void panic(char* message) {
+    vga_clear();
+    logo_crash(panic_logo);
+    vga_print(message);
+    while (1) {__asm__ volatile ("hlt");}
 }

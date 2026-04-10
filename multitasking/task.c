@@ -1,4 +1,5 @@
 #include "task.h"
+int multitasking_active = 1;
 
 task_t tasks[MAX_TASKS];
 int current_task = 0;
@@ -13,8 +14,6 @@ void task_init() {
         tasks[i].esp = 0;
     }
 }
-
-int multitasking_active = 0;
 
 void create_task(void (*func)(), int id) {
     uint32_t *stk = (uint32_t*)(stacks[id] + STACK_SIZE);
@@ -32,7 +31,6 @@ void scheduler_tick() {
 }
 
 void start_tasks() {
-    multitasking_active = 1;
     current_task = 0;
     __asm__ volatile(
         "mov %0, %%esp\n"

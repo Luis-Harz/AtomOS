@@ -1,5 +1,3 @@
-fs.c
-fs.h
 buildusb.sh
 iso/
 kernel.o

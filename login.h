@@ -15,6 +15,7 @@
 typedef struct {
     char username[16];
     uint32_t passhash;
+    int is_sudo;
 } user_t;
 user_t users[MAX_USERS];
 int user_count = 0;
@@ -57,7 +58,7 @@ void make_user() {
         char pass[128];
         char line[256];
         vga_print("Enter username: ");
-        input(user);
+        input(user, sizeof(user));
         int exists = 0;
         for(int i = 0; i < user_count; i++) {
             if(strcmp(users[i].username, user) == 0) {
@@ -67,7 +68,7 @@ void make_user() {
         }
         if (exists == 1) {continue;}
         vga_print("Enter password: ");
-        input(pass);
+        input(pass, sizeof(pass));
         uint32_t passhash = hash(pass);
         int i = 0;
         while(user[i]) { line[i] = user[i]; i++; }
@@ -92,6 +93,47 @@ void make_user() {
         reboot();
         break;
     }
+}
+//-----Delete-----
+void delete_user() {
+    vga_print("-----Delete User-----\n");
+    char username[128];
+    vga_print("Enter username to delete: ");
+    input(username, sizeof(username));
+    int found = -1;
+    for(int i = 0; i < user_count; i++) {
+        if(strcmp(users[i].username, username) == 0) {
+            found = i;
+            break;
+        }
+    }
+    if(found == -1) {
+        vga_print("User not found!\n");
+        return;
+    }
+    for(int i = found; i < user_count - 1; i++) {
+        users[i] = users[i + 1];
+    }
+    user_count--;
+    fs_write("users.txt", (uint8_t*)"", 0);
+    for(int i = 0; i < user_count; i++) {
+        char line[256];
+        int pos = 0;
+        int j = 0;
+        while(users[i].username[j] && j < 15) {
+            line[pos++] = users[i].username[j++];
+        }
+        line[pos++] = ':';
+        char hash_str[12];
+        u32_to_str(users[i].passhash, hash_str);
+        j = 0;
+        while(hash_str[j]) line[pos++] = hash_str[j++];
+        line[pos++] = '\n';
+        line[pos] = 0;
+        fs_append("users.txt", (uint8_t*)line, pos);
+    }
+
+    vga_print("User deleted!\n");
 }
 
 //-----Load-----
@@ -131,6 +173,15 @@ void clearchar(char *string, int len) {
     for(int i = 0; i < len; i++) string[i] = 0;
 }
 
+int user_exists(char* user) {
+    for (int i = 0; i < user_count; i++) {
+        if (strcmp(users[i].username, user) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 //-------Login-------
 char* login() {
     vga_clear();
@@ -146,9 +197,9 @@ char* login() {
         clearchar(username, sizeof(username));
         clearchar(password, sizeof(password));
         vga_print("Username: ");
-        input(username);
+        input(username, sizeof(username));
         vga_print("Password: ");
-        input(password);
+        input(password, sizeof(password));
         int founduser = 0;
         for (int i = 0; i < user_count; i++) {
             if (strcmp(users[i].username, username) == 0) {founduser = 1; user = i;}
@@ -172,6 +223,35 @@ char* login() {
             }
         }
     }
+}
+
+//-------Authenticate-------
+int authenticate() {
+    char username[16];
+    char password[128];
+    int user = 0;
+    vga_print("Username: ");
+    input(username, sizeof(username));
+    vga_print("Password: ");
+    input(password, sizeof(username));
+    int founduser = 0;
+    for (int i = 0; i < user_count; i++) {
+        if (strcmp(users[i].username, username) == 0) {founduser = 1; user = i;}
+    }
+    if (founduser == 0) {
+        vga_print("User not found!\n");
+        return 0;
+    } else {
+        if (strcmp(users[user].username, username) == 0 && users[user].passhash == hash(password)) {
+            vga_print("Authentication successful\n");
+            return 1;
+        } else if(strcmp(users[user].username, username) == 0 && users[user].passhash != hash(password)) {
+            vga_print("Authentication failed!\n");
+            return 0;
+        }
+    }
+    vga_print("RETURNING AUTH\n");
+    return 0;
 }
 
 #endif

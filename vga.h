@@ -83,11 +83,13 @@ void put_block(int x, int y, uint8_t fg, uint8_t bg);
 int  vga_used_lines(void);
 void logo(char *lg);
 void colortest(void (*delay_fn)(uint32_t));
+void fb_draw_line(int x0, int y0, int x1, int y1, uint32_t color);
 void fb_draw_triangle_outline(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color);
 void fb_draw_triangle_outline_thick(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t color,int thickness);
 void fb_drawchar(int cx, int cy, char c, uint8_t fg, uint8_t bg);
 void logo_crash(char *lg);
-
+void change_color_vga(uint8_t in_color);
+void panic(char* message);
 static inline uint32_t vga_to_rgb_func(uint32_t color) {
     if (color <= 15) {
         static const uint32_t vga_to_rgb[16] = {

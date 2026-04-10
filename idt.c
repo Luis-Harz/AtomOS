@@ -1,5 +1,5 @@
 #include "idt.h"
-#include "multitasking/irq0.c"
+//#include "multitasking/irq0.c"
 #include "mouse.h"
 
 struct idt_entry idt[256];
@@ -150,8 +150,8 @@ void idt_init() {
     idt_set_gate(29, (uint32_t)isr29, 0x08, 0x8E);
     idt_set_gate(30, (uint32_t)isr30, 0x08, 0x8E);
     idt_set_gate(31, (uint32_t)isr31, 0x08, 0x8E);
-    extern void irq0_stub();
-    idt_set_gate(0x20, (uint32_t)irq0_stub, 0x08, 0x8E);
+    //extern void irq0_stub();
+    //idt_set_gate(0x20, (uint32_t)irq0_stub, 0x08, 0x8E);
     idt_load();
     pic_remap();
     outb(0xA1, 0xAF);
