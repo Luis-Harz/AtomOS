@@ -7,12 +7,27 @@ i made it because i wanted to learn a bit of Bare Metal C or also called freesta
 It has about 3200 Lines of code right now. <br>
 the filesystem is persistent. <br>
 you have to emulate it with VGA(because it uses VGA Framebuffer, well now it kinda works on HDMI) <br>
-It only supports english keyboard layout <br>
+It supports English and German keyboard layouts (note: ä, ö and ü don't work yet). <br>
 It doesn't work on USB drives because USB driver is missing. <br>
 SATA disks work. <br>
 ## TODO
-[ ] Desktop <br>
-[X] ATA Driver <br>
+[ ] USB Driver  
+[ ] Desktop  
+[X] ATA Driver  
+[X] Multitasking
+
+## Features
+
+- VGA framebuffer graphics
+- Persistent FAT filesystem
+- ATA/SATA disk driver
+- Keyboard and mouse support
+- Basic multitasking
+- Memory management
+- PCI device enumeration
+- RTC (real-time clock)
+- Piezo buzzer support
+- Built-in games: Snake, Pong
 
 ##FatFS
 ----------------------------------------------------------------------------
